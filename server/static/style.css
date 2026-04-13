@@ -17,8 +17,8 @@ body {
 
 #app {
   max-width: 1200px; margin: 0 auto; padding: 0 16px;
-  display: flex; flex-direction: column; height: 100vh;
-  height: 100dvh;
+  display: flex; flex-direction: column; min-height: 100vh;
+  min-height: 100dvh;
 }
 
 header {
@@ -377,11 +377,31 @@ section h2 {
 /* ── Mobile styles ───────────────────────────────────────────────────── */
 
 @media (max-width: 768px) {
-  #app { padding: 0 12px; }
+  #app {
+    padding: 0 12px; padding-bottom: 24px;
+    height: auto; min-height: 100dvh;
+  }
 
-  .results { grid-template-columns: 1fr; }
+  .main-layout {
+    flex-direction: column; flex: none;
+  }
 
-  .main-layout { flex-direction: column; }
+  .results {
+    grid-template-columns: 1fr;
+    flex: none; min-height: auto;
+    gap: 12px;
+  }
+
+  .transcript-panel { flex: none; }
+  .transcript-scroll {
+    flex: none; max-height: 50vh; min-height: 200px;
+  }
+
+  .replies-panel { flex: none; }
+  .replies-grid {
+    flex: none; max-height: none;
+    padding-bottom: 24px;
+  }
 
   .contacts-sidebar {
     width: 100%; flex-direction: row; overflow-x: auto; gap: 4px;
@@ -395,11 +415,23 @@ section h2 {
   .preview-small { display: none; }
   .status-banner { font-size: 12px; padding: 8px; }
   .training-bar { font-size: 10px; }
-  .msg { font-size: 14px; padding: 8px 12px; }
-  .reply-card { padding: 12px; }
-  .reply-card .text { font-size: 14px; }
-  .reply-card .why { font-size: 12px; }
-  .reply-card .hint { opacity: 1; }
+
   .coach-section { padding: 12px; }
-  .coach-read, .coach-advice { font-size: 13px; }
+  .coach-read { font-size: 14px; }
+  .coach-advice { font-size: 14px; }
+
+  .msg { font-size: 15px; padding: 9px 13px; max-width: 90%; }
+  .msg .who { font-size: 10px; }
+
+  .reply-card { padding: 14px; }
+  .reply-card .label { font-size: 10px; }
+  .reply-card .text { font-size: 15px; }
+  .reply-card .why { font-size: 13px; }
+  .reply-card .hint { opacity: 1; }
+
+  .presets-bar select { font-size: 13px; padding: 8px 10px; }
+  .preset-add-btn { font-size: 12px; padding: 8px 12px; }
+  .regen-btn { font-size: 12px; padding: 6px 12px; }
+
+  section h2 { font-size: 11px; }
 }
