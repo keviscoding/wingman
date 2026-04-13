@@ -7,10 +7,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY wingman/ wingman/
 COPY server/ server/
-COPY training/ training/
-COPY chats/ chats/
-COPY presets.json* ./
-COPY .env* ./
+
+RUN mkdir -p training chats
 
 ENV WINGMAN_HEADLESS=1
 ENV PYTHONUNBUFFERED=1
