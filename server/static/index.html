@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Wingman</title>
+  <link rel="manifest" href="/static/manifest.json">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Wingman">
+  <meta name="theme-color" content="#0a0a0f">
+  <link rel="stylesheet" href="/static/style.css?v=8">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>WINGMAN</h1>
+      <div class="header-right">
+        <button class="mic-btn" id="micBtn" title="Pause/Resume mic">
+          <span id="micIcon">&#127908;</span>
+          <span id="micLabel">Listening</span>
+        </button>
+      </div>
+    </header>
+
+    <div class="status-banner" id="statusBanner">
+      <span id="statusText">Upload screenshots to get started</span>
+    </div>
+
+    <!-- Training status -->
+    <div class="training-bar" id="trainingBar">
+      <span class="training-icon" id="trainingIcon">&#128218;</span>
+      <span id="trainingLabel">Training: not loaded</span>
+      <label class="upload-btn">
+        Upload transcripts
+        <input type="file" id="uploadInput" multiple accept=".txt,.md,.text,.csv,.json,.srt,.vtt" hidden>
+      </label>
+    </div>
+
+    <!-- Screenshot upload section -->
+    <div class="upload-section" id="uploadSection">
+      <div class="upload-row">
+        <input type="text" id="contactInput" class="contact-input"
+               placeholder="Contact name (e.g. Evie)" autocomplete="off">
+      </div>
+      <div class="upload-row">
+        <label class="screenshot-upload-btn" id="screenshotBtn">
+          <span class="upload-icon">&#128247;</span>
+          <span>Upload Screenshots</span>
+          <input type="file" id="screenshotInput" multiple accept="image/*" hidden>
+        </label>
+      </div>
+      <div class="upload-preview" id="uploadPreview"></div>
+      <textarea id="extraContext" class="context-input"
+                placeholder="Extra context... (e.g. 'we met at a party', 'she's been cold lately')"
+                rows="2"></textarea>
+      <button class="analyze-btn" id="analyzeBtn" disabled>
+        <span id="analyzeBtnText">Select screenshots first</span>
+      </button>
+    </div>
+
+    <div class="main-layout">
+      <!-- Saved contacts sidebar / horizontal scroll on mobile -->
+      <aside class="contacts-sidebar" id="contactsSidebar">
+        <h3>Saved Chats</h3>
+        <div id="contactsList" class="contacts-list">
+          <p class="empty-small">No chats yet</p>
+        </div>
+      </aside>
+
+      <!-- Content area -->
+      <div class="content">
+        <!-- Screen preview (desktop only) -->
+        <div class="preview-small" id="previewSection">
+          <img id="previewImg" src="/frame.jpg" alt="Screen">
+        </div>
+
+        <!-- Current contact label -->
+        <div class="contact-label" id="contactLabel"></div>
+
+        <!-- Results -->
+        <main id="results" class="results hidden">
+          <section class="transcript-panel">
+            <h2>Chat <span id="msgCount" class="count"></span></h2>
+            <div id="transcript" class="transcript-scroll"></div>
+          </section>
+          <section class="replies-panel">
+            <!-- Situation read + advice -->
+            <div id="coachSection" class="coach-section hidden">
+              <div class="coach-read" id="coachRead"></div>
+              <div class="coach-advice" id="coachAdvice"></div>
+            </div>
+
+            <!-- Goal presets -->
+            <div class="presets-bar">
+              <select id="presetSelect">
+                <option value="-1">No goal (default)</option>
+              </select>
+              <button class="preset-add-btn" id="addPresetBtn" title="Save a new goal preset">+ New goal</button>
+            </div>
+
+            <div class="replies-header">
+              <h2>Replies</h2>
+              <button class="regen-btn" id="regenBtn" title="Generate new replies">&#8635; New replies</button>
+            </div>
+            <div id="replies" class="replies-grid"></div>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <div id="toast" class="toast">Copied!</div>
+  </div>
+  <script src="/static/app.js?v=8"></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+google-genai>=1.0.0
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+websockets>=14.0
+python-dotenv>=1.0.0
+Pillow>=11.0.0
+thefuzz>=0.22.0
+python-Levenshtein>=0.26.0
+python-multipart>=0.0.18
