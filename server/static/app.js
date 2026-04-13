@@ -26,30 +26,139 @@
   const trainingIcon = document.getElementById("trainingIcon");
   const uploadInput = document.getElementById("uploadInput");
 
-  const uploadSection = document.getElementById("uploadSection");
   const contactInput = document.getElementById("contactInput");
   const screenshotInput = document.getElementById("screenshotInput");
   const uploadPreview = document.getElementById("uploadPreview");
   const analyzeBtn = document.getElementById("analyzeBtn");
   const analyzeBtnText = document.getElementById("analyzeBtnText");
 
+  const screenshareBtn = document.getElementById("screenshareBtn");
+  const screenshareActive = document.getElementById("screenshareActive");
+  const screenshareVideo = document.getElementById("screenshareVideo");
+  const frameCountEl = document.getElementById("frameCount");
+  const captureToggle = document.getElementById("captureToggle");
+  const stopShareBtn = document.getElementById("stopShareBtn");
+
   let ws = null, reconnectTimer = null, micMuted = false, isHeadless = false;
   let pendingFiles = [];
+
+  // ── Screen share state ─────────────────────────────────────────────
+
+  let mediaStream = null;
+  let capturedFrames = [];
+  let isCapturing = false;
+  let captureInterval = null;
+  const MAX_FRAMES = 30;
+  const CAPTURE_FPS = 1;
+
+  const hasScreenShare = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+
+  if (!hasScreenShare) {
+    screenshareBtn.style.display = "none";
+    document.querySelector(".or-divider").style.display = "none";
+  }
+
+  screenshareBtn.addEventListener("click", startScreenShare);
+  stopShareBtn.addEventListener("click", stopScreenShare);
+  captureToggle.addEventListener("click", toggleCapture);
+
+  async function startScreenShare() {
+    try {
+      mediaStream = await navigator.mediaDevices.getDisplayMedia({
+        video: { width: { ideal: 1080 }, height: { ideal: 1920 } },
+        audio: false,
+      });
+
+      screenshareVideo.srcObject = mediaStream;
+      screenshareBtn.style.display = "none";
+      screenshareActive.classList.remove("hidden");
+
+      mediaStream.getVideoTracks()[0].onended = () => stopScreenShare();
+
+      capturedFrames = [];
+      updateFrameCount();
+      startCapture();
+    } catch (e) {
+      console.log("Screen share cancelled or failed:", e);
+    }
+  }
+
+  function stopScreenShare() {
+    stopCapture();
+    if (mediaStream) {
+      mediaStream.getTracks().forEach(t => t.stop());
+      mediaStream = null;
+    }
+    screenshareVideo.srcObject = null;
+    screenshareActive.classList.add("hidden");
+    screenshareBtn.style.display = "";
+    updateAnalyzeBtn();
+  }
+
+  function startCapture() {
+    if (isCapturing) return;
+    isCapturing = true;
+    captureToggle.textContent = "\u23F9 Stop capture";
+    captureToggle.classList.add("capturing");
+    captureToggle.classList.remove("paused");
+
+    captureInterval = setInterval(() => {
+      if (!mediaStream || !screenshareVideo.videoWidth) return;
+      grabFrame();
+    }, 1000 / CAPTURE_FPS);
+  }
+
+  function stopCapture() {
+    isCapturing = false;
+    if (captureInterval) {
+      clearInterval(captureInterval);
+      captureInterval = null;
+    }
+    captureToggle.textContent = "\u25CF Resume";
+    captureToggle.classList.remove("capturing");
+    captureToggle.classList.add("paused");
+  }
+
+  function toggleCapture() {
+    if (isCapturing) stopCapture();
+    else startCapture();
+  }
+
+  function grabFrame() {
+    const canvas = document.createElement("canvas");
+    const vw = screenshareVideo.videoWidth;
+    const vh = screenshareVideo.videoHeight;
+    const scale = Math.min(1080 / vw, 1);
+    canvas.width = Math.round(vw * scale);
+    canvas.height = Math.round(vh * scale);
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(screenshareVideo, 0, 0, canvas.width, canvas.height);
+
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      capturedFrames.push(blob);
+      if (capturedFrames.length > MAX_FRAMES) capturedFrames.shift();
+      updateFrameCount();
+      updateAnalyzeBtn();
+    }, "image/jpeg", 0.85);
+  }
+
+  function updateFrameCount() {
+    const n = capturedFrames.length;
+    frameCountEl.textContent = `${n} frame${n !== 1 ? "s" : ""} captured`;
+  }
 
   // ── Screenshot upload ──────────────────────────────────────────────
 
   screenshotInput.addEventListener("change", () => {
     pendingFiles = Array.from(screenshotInput.files);
     renderUploadPreview();
+    updateAnalyzeBtn();
   });
 
   function renderUploadPreview() {
     uploadPreview.innerHTML = "";
-    if (!pendingFiles.length) {
-      analyzeBtn.disabled = true;
-      analyzeBtnText.textContent = "Select screenshots first";
-      return;
-    }
+    if (!pendingFiles.length) return;
     pendingFiles.forEach((f, i) => {
       const img = document.createElement("img");
       img.src = URL.createObjectURL(f);
@@ -58,19 +167,48 @@
         pendingFiles.splice(i, 1);
         screenshotInput.value = "";
         renderUploadPreview();
+        updateAnalyzeBtn();
       });
       uploadPreview.appendChild(img);
     });
-    const n = pendingFiles.length;
-    analyzeBtn.disabled = false;
-    analyzeBtnText.textContent = `Analyze ${n} screenshot${n > 1 ? "s" : ""}`;
+  }
+
+  function updateAnalyzeBtn() {
+    const hasFrames = capturedFrames.length > 0;
+    const hasFiles = pendingFiles.length > 0;
+
+    if (hasFrames || hasFiles) {
+      analyzeBtn.disabled = false;
+      if (hasFrames && !hasFiles) {
+        analyzeBtnText.textContent = `Analyze ${capturedFrames.length} frame${capturedFrames.length > 1 ? "s" : ""}`;
+      } else if (hasFiles) {
+        analyzeBtnText.textContent = `Analyze ${pendingFiles.length} screenshot${pendingFiles.length > 1 ? "s" : ""}`;
+      }
+    } else {
+      analyzeBtn.disabled = true;
+      analyzeBtnText.textContent = "Select screenshots or share screen";
+    }
   }
 
   analyzeBtn.addEventListener("click", async () => {
-    if (!pendingFiles.length) return;
+    const hasFrames = capturedFrames.length > 0;
+    const hasFiles = pendingFiles.length > 0;
+    if (!hasFrames && !hasFiles) return;
+
+    if (isCapturing) stopCapture();
 
     const fd = new FormData();
-    pendingFiles.forEach(f => fd.append("files", f));
+
+    if (hasFrames) {
+      const uniqueFrames = deduplicateFrames(capturedFrames);
+      uniqueFrames.forEach((blob, i) =>
+        fd.append("files", blob, `frame_${i}.jpg`)
+      );
+    }
+    if (hasFiles) {
+      pendingFiles.forEach(f => fd.append("files", f));
+    }
+
     fd.append("contact", contactInput.value.trim());
     fd.append("extra_context", extraContextEl.value.trim());
 
@@ -84,12 +222,9 @@
       if (d.error) {
         analyzeBtnText.textContent = d.error;
         analyzeBtn.classList.remove("processing");
-        setTimeout(() => {
-          analyzeBtn.disabled = false;
-          analyzeBtnText.textContent = `Analyze ${pendingFiles.length} screenshot${pendingFiles.length > 1 ? "s" : ""}`;
-        }, 2000);
+        setTimeout(() => updateAnalyzeBtn(), 2000);
       } else {
-        analyzeBtnText.textContent = `Reading ${d.screenshots} screenshot${d.screenshots > 1 ? "s" : ""}...`;
+        analyzeBtnText.textContent = `Reading ${d.screenshots} frame${d.screenshots > 1 ? "s" : ""}...`;
         if (d.contact) contactInput.value = d.contact;
       }
     } catch (e) {
@@ -98,6 +233,19 @@
       analyzeBtn.disabled = false;
     }
   });
+
+  function deduplicateFrames(frames) {
+    if (frames.length <= 10) return frames;
+    const step = Math.max(1, Math.floor(frames.length / 10));
+    const picked = [];
+    for (let i = 0; i < frames.length; i += step) {
+      picked.push(frames[i]);
+    }
+    if (picked[picked.length - 1] !== frames[frames.length - 1]) {
+      picked.push(frames[frames.length - 1]);
+    }
+    return picked;
+  }
 
   // ── WebSocket ──────────────────────────────────────────────────────
 
@@ -130,16 +278,16 @@
   }, 2000);
 
   setInterval(() => {
-    if (!isHeadless) previewImg.src = "/frame.jpg?t=" + Date.now();
+    if (!isHeadless && !mediaStream) previewImg.src = "/frame.jpg?t=" + Date.now();
   }, 2000);
 
   // ── Status ─────────────────────────────────────────────────────────
 
   const msgs = {
-    idle: "Upload screenshots or say \"read this chat\"",
+    idle: "Share your screen or upload screenshots",
     processing: "Reading the chat...",
     generating: "Generating reply options...",
-    done: "Done! Upload more screenshots or say \"read this\" for another chat.",
+    done: "Done! Share more or upload new screenshots.",
   };
 
   function handleStatus(s) {
@@ -149,7 +297,6 @@
     statusText.textContent = msgs[state] || state;
     statusBanner.classList.toggle("active", state !== "idle");
 
-    // In headless mode, hide desktop-only elements
     if (isHeadless) {
       micBtn.classList.add("hidden-headless");
       if (previewSection) previewSection.style.display = "none";
@@ -158,23 +305,16 @@
       if (previewSection) previewSection.style.display = "";
     }
 
-    // Reset analyze button when done/idle
     if (state === "done" || state === "idle") {
       analyzeBtn.classList.remove("processing");
-      if (pendingFiles.length) {
-        analyzeBtn.disabled = false;
-        analyzeBtnText.textContent = `Analyze ${pendingFiles.length} screenshot${pendingFiles.length > 1 ? "s" : ""}`;
-      } else {
-        analyzeBtn.disabled = true;
-        analyzeBtnText.textContent = "Select screenshots first";
-      }
       if (state === "done") {
+        capturedFrames = [];
         pendingFiles = [];
         screenshotInput.value = "";
         uploadPreview.innerHTML = "";
-        analyzeBtn.disabled = true;
-        analyzeBtnText.textContent = "Select screenshots first";
+        updateFrameCount();
       }
+      updateAnalyzeBtn();
     }
 
     micMuted = s.mic_muted || false;

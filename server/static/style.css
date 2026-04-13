@@ -66,7 +66,7 @@ select {
 }
 .upload-btn:hover { border-color: var(--accent); color: var(--accent); }
 
-/* ── Screenshot upload section ───────────────────────────────────────── */
+/* ── Input section ────────────────────────────────────────────────────── */
 
 .upload-section {
   display: flex; flex-direction: column; gap: 10px;
@@ -87,15 +87,77 @@ select {
 .contact-input:focus { border-color: var(--accent); }
 .contact-input::placeholder { color: var(--dim); }
 
+/* ── Screen share ────────────────────────────────────────────────────── */
+
+.screenshare-box { display: flex; flex-direction: column; gap: 8px; }
+
+.screenshare-btn {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%; padding: 14px 20px; border-radius: 10px;
+  background: linear-gradient(135deg, var(--green), #00b5b0);
+  color: var(--bg); font-size: 15px; font-weight: 600;
+  cursor: pointer; transition: all 0.2s; border: none;
+}
+.screenshare-btn:active { transform: scale(0.97); opacity: 0.9; }
+
+.screenshare-active {
+  border-radius: 10px; overflow: hidden;
+  border: 2px solid var(--green); background: #000;
+}
+.screenshare-active.hidden { display: none; }
+.screenshare-active video {
+  width: 100%; max-height: 160px; object-fit: contain; display: block;
+}
+.screenshare-controls {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  background: var(--surface-2);
+}
+.frame-count {
+  font-size: 11px; color: var(--dim); flex: 1;
+}
+.capture-toggle {
+  padding: 6px 14px; border-radius: 6px; border: none;
+  background: var(--red); color: white;
+  font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.capture-toggle.capturing {
+  background: var(--red);
+  animation: pulse 1s ease-in-out infinite;
+}
+.capture-toggle.paused {
+  background: var(--green); color: var(--bg);
+}
+.stop-share-btn {
+  padding: 6px 12px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--dim); font-size: 12px; cursor: pointer;
+}
+.stop-share-btn:hover { border-color: var(--red); color: var(--red); }
+
+.or-divider {
+  display: flex; align-items: center; gap: 12px;
+  color: var(--dim); font-size: 11px;
+}
+.or-divider::before, .or-divider::after {
+  content: ""; flex: 1; height: 1px; background: var(--border);
+}
+
+/* ── Screenshot upload ───────────────────────────────────────────────── */
+
 .screenshot-upload-btn {
   display: flex; align-items: center; justify-content: center; gap: 8px;
   width: 100%; padding: 14px 20px; border-radius: 10px;
   background: linear-gradient(135deg, var(--accent), #7c6cf7);
   color: white; font-size: 15px; font-weight: 600;
-  cursor: pointer; transition: all 0.2s;
-  border: none;
+  cursor: pointer; transition: all 0.2s; border: none;
 }
 .screenshot-upload-btn:active { transform: scale(0.97); opacity: 0.9; }
+.screenshot-upload-secondary {
+  padding: 10px 16px; font-size: 13px;
+  background: var(--surface-2); color: var(--dim);
+  border: 1px solid var(--border);
+}
+.screenshot-upload-secondary:active { opacity: 0.8; }
 .upload-icon { font-size: 20px; }
 
 .upload-preview {
