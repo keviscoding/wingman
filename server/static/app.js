@@ -51,18 +51,20 @@
   const MAX_FRAMES = 30;
   const CAPTURE_FPS = 1;
 
-  const hasScreenShare = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
-
-  if (!hasScreenShare) {
-    screenshareBtn.style.display = "none";
-    document.querySelector(".or-divider").style.display = "none";
-  }
-
   screenshareBtn.addEventListener("click", startScreenShare);
   stopShareBtn.addEventListener("click", stopScreenShare);
   captureToggle.addEventListener("click", toggleCapture);
 
   async function startScreenShare() {
+    if (!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia)) {
+      if (location.protocol !== "https:") {
+        alert("Screen sharing requires HTTPS. You're on HTTP — use your DigitalOcean HTTPS URL, or upload screenshots instead.");
+      } else {
+        alert("Your browser doesn't support screen sharing. Use Chrome on Android, or upload screenshots instead.");
+      }
+      return;
+    }
+
     try {
       mediaStream = await navigator.mediaDevices.getDisplayMedia({
         video: { width: { ideal: 1080 }, height: { ideal: 1920 } },
@@ -80,6 +82,9 @@
       startCapture();
     } catch (e) {
       console.log("Screen share cancelled or failed:", e);
+      if (e.name === "NotAllowedError") {
+        alert("Screen sharing was denied. Please allow it when prompted.");
+      }
     }
   }
 
