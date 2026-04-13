@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Wingman">
   <meta name="theme-color" content="#0a0a0f">
-  <link rel="stylesheet" href="/static/style.css?v=10">
+  <link rel="stylesheet" href="/static/style.css?v=11">
 </head>
 <body>
   <div id="app">
@@ -44,8 +44,8 @@
                placeholder="Contact name (e.g. Evie)" autocomplete="off">
       </div>
 
-      <!-- Screen share (Android / desktop browsers) -->
-      <div class="screenshare-box" id="screenshareBox">
+      <!-- Screen share (desktop browsers only) -->
+      <div class="screenshare-box hidden" id="screenshareBox">
         <button class="screenshare-btn" id="screenshareBtn">
           <span class="upload-icon">&#128241;</span>
           <span>Share Screen</span>
@@ -58,13 +58,12 @@
             <button class="stop-share-btn" id="stopShareBtn">Stop</button>
           </div>
         </div>
+        <div class="or-divider"><span>or</span></div>
       </div>
 
-      <div class="or-divider"><span>or</span></div>
-
-      <!-- Screenshot upload fallback -->
+      <!-- Screenshot upload -->
       <div class="upload-row">
-        <label class="screenshot-upload-btn screenshot-upload-secondary" id="screenshotBtn">
+        <label class="screenshot-upload-btn" id="screenshotBtn">
           <span class="upload-icon">&#128247;</span>
           <span>Upload Screenshots</span>
           <input type="file" id="screenshotInput" multiple accept="image/*" hidden>
@@ -132,6 +131,6 @@
 
     <div id="toast" class="toast">Copied!</div>
   </div>
-  <script src="/static/app.js?v=10"></script>
+  <script src="/static/app.js?v=11"></script>
 </body>
 </html>

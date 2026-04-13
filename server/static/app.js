@@ -51,20 +51,18 @@
   const MAX_FRAMES = 30;
   const CAPTURE_FPS = 1;
 
+  const isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+  const screenshareBox = document.getElementById("screenshareBox");
+
+  if (!isMobile && navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
+    screenshareBox.classList.remove("hidden");
+  }
+
   screenshareBtn.addEventListener("click", startScreenShare);
   stopShareBtn.addEventListener("click", stopScreenShare);
   captureToggle.addEventListener("click", toggleCapture);
 
   async function startScreenShare() {
-    if (!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia)) {
-      if (location.protocol !== "https:") {
-        alert("Screen sharing requires HTTPS. You're on HTTP — use your DigitalOcean HTTPS URL, or upload screenshots instead.");
-      } else {
-        alert("Your browser doesn't support screen sharing. Use Chrome on Android, or upload screenshots instead.");
-      }
-      return;
-    }
-
     try {
       mediaStream = await navigator.mediaDevices.getDisplayMedia({
         video: { width: { ideal: 1080 }, height: { ideal: 1920 } },
@@ -82,9 +80,6 @@
       startCapture();
     } catch (e) {
       console.log("Screen share cancelled or failed:", e);
-      if (e.name === "NotAllowedError") {
-        alert("Screen sharing was denied. Please allow it when prompted.");
-      }
     }
   }
 
@@ -191,7 +186,7 @@
       }
     } else {
       analyzeBtn.disabled = true;
-      analyzeBtnText.textContent = "Select screenshots or share screen";
+      analyzeBtnText.textContent = "Upload screenshots first";
     }
   }
 
@@ -289,10 +284,12 @@
   // ── Status ─────────────────────────────────────────────────────────
 
   const msgs = {
-    idle: "Share your screen or upload screenshots",
+    idle: isMobile
+      ? "Upload chat screenshots to get started"
+      : "Share your screen or upload screenshots",
     processing: "Reading the chat...",
     generating: "Generating reply options...",
-    done: "Done! Share more or upload new screenshots.",
+    done: "Done! Upload more screenshots for another chat.",
   };
 
   function handleStatus(s) {
