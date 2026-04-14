@@ -41,6 +41,7 @@ class TrainingCache:
         self._file_hash: str | None = None
         self._loaded_files: int = 0
         self._token_count: int = 0
+        self._created_at: float = 0
         self.status: str = "not loaded"
 
     @property
@@ -145,6 +146,7 @@ class TrainingCache:
             self._file_hash = new_hash
             self._loaded_files = len(parts)
             self._token_count = cache.usage_metadata.total_token_count or 0
+            self._created_at = time.time()
             self.status = "loaded"
             print(f"[training] Cache created: {self._token_count:,} tokens, "
                   f"{self._loaded_files} files, TTL {CACHE_TTL}")
@@ -154,6 +156,17 @@ class TrainingCache:
             print(f"[training] Cache creation failed: {exc}")
             self.status = f"error: {exc}"
             return False
+
+    def ensure_valid(self):
+        """Re-create the cache if it's expired or about to expire (50 min)."""
+        if not self._cache_name:
+            return self.load()
+        elapsed = time.time() - self._created_at
+        if elapsed > 2700:
+            print(f"[training] Cache age {int(elapsed)}s — refreshing before expiry...")
+            self._file_hash = None
+            return self.load()
+        return True
 
     def refresh_if_needed(self):
         """Check if files changed and refresh the cache."""

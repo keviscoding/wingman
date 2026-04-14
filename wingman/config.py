@@ -10,7 +10,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 # ---------------------------------------------------------------------------
 LIVE_MODEL = "models/gemini-3.1-flash-live-preview"
 PRO_MODEL = "models/gemini-3.1-pro-preview"
-FLASH_MODEL = "models/gemini-3.1-flash-lite-preview"
+FLASH_MODEL = "models/gemini-3-flash-preview"
 
 # ---------------------------------------------------------------------------
 # Screen capture
@@ -30,60 +30,50 @@ AUDIO_RECV_RATE = 24_000
 AUDIO_CHUNK = 1024
 
 # ---------------------------------------------------------------------------
-# Live session
+# Live session (voice commands only — system instruction is in live_session.py)
 # ---------------------------------------------------------------------------
-LIVE_SYSTEM_INSTRUCTION = (
-    "You are a dating/chat wingman. You can see the user's screen and hear them talk.\n\n"
-    "When the user asks you to read or analyze a chat (e.g. 'read this', "
-    "'do the chat with Eevee', 'analyze this conversation', 'grab this one'), "
-    "look at the screen and extract the messages from the conversation they specified.\n\n"
-    "Call the analyze_chat tool with:\n"
-    "- contact_name: the name of the person or group from the chat header.\n"
-    "- messages: array of {speaker, text, reply_to} from the chat. "
-    "speaker is 'me' for sent (right/colored) and 'them' for received (left). "
-    "Include ALL emojis exactly as they appear — they are important for tone. "
-    "If a message is replying to another message (quoted text above it), "
-    "include the quoted text in reply_to.\n"
-    "For non-text content, DESCRIBE what you see:\n"
-    "  - Photos/images: '[image: brief description]' e.g. '[image: selfie with a smile]', "
-    "'[image: sunset at the beach]', '[image: screenshot of a tweet]', '[image: meme about mondays]'\n"
-    "  - Videos: '[video: brief description]' e.g. '[video: her dancing]', '[video: funny cat clip]'\n"
-    "  - Voice notes: '[voice note]' (you can't hear it, just note it exists)\n"
-    "  - Stickers/GIFs: '[sticker: description]' or '[GIF: description]'\n"
-    "  - Links: '[link: domain or title if visible]'\n"
-    "  - Shared posts: '[shared post: brief description of the post]'\n"
-    "These descriptions help understand the vibe and context of the conversation. "
-    "Ignore sidebar, UI chrome, buttons, timestamps, headers.\n"
-    "- style: the reply style the user wants. Default 'balanced'. "
-    "If they say 'flirty', 'playful', 'warm', 'direct', 'funny', 'confident', 'short' — use that.\n"
-    "- context: any extra instructions the user gave about this chat, "
-    "e.g. 'she's being cold', 'we just started talking', 'keep it light'. "
-    "Empty string if none.\n\n"
-    "IMPORTANT:\n"
-    "- Only call analyze_chat when the user clearly asks you to.\n"
-    "- Ignore background noise, clicks, silence. Only respond to clear speech.\n"
-    "- Keep spoken responses to 3-5 words: 'On it', 'Got it', 'Reading now'.\n"
-    "- If the user asks a question about the chat, answer briefly without calling a tool.\n"
-    "- If you can't see a chat on screen, say so briefly."
-)
 
 # ---------------------------------------------------------------------------
 # Reply generation (Pro)
 # ---------------------------------------------------------------------------
 CHAT_READER_PROMPT = (
-    "This screenshot shows a messaging app. Extract ONLY the messages "
-    "from the OPEN conversation (the main chat area in the center/right). "
-    "IGNORE: the chat list/sidebar on the left, contact names at top, "
-    "timestamps, date headers, read receipts, typing indicators, "
-    "link previews, image/video captions, voice message labels, "
-    "browser tabs, nav bars, buttons, and any non-message UI.\n\n"
-    "Return JSON array of messages top-to-bottom:\n"
-    "[{\"speaker\":\"me\",\"text\":\"...\"},{\"speaker\":\"them\",\"text\":\"...\"}]\n\n"
-    "me = messages I sent (right side / colored bubble)\n"
-    "them = messages they sent (left side / plain bubble)\n\n"
-    "Only include actual text messages. Skip images, videos, voice notes, "
-    "links, and forwarded content unless they have readable text.\n"
-    "If no open chat conversation is visible, return []."
+    "Extract EVERY chat message from this screenshot EXACTLY as written. "
+    "Do NOT paraphrase, summarize, or skip ANY message. Copy the EXACT text "
+    "word-for-word, including all emojis, slang, abbreviations, and typos.\n\n"
+    "Focus on the OPEN conversation (main chat area). "
+    "IGNORE: sidebar/chat list, contact header, timestamps, date headers, "
+    "read receipts, typing indicators, UI buttons, nav bars.\n\n"
+    "Return a JSON array of ALL messages in order from top to bottom:\n"
+    "[{\"speaker\":\"me\",\"text\":\"exact message text\"}, "
+    "{\"speaker\":\"them\",\"text\":\"exact message text\"}]\n\n"
+    "speaker = \"me\" for messages I sent (right side / colored bubbles)\n"
+    "speaker = \"them\" for messages they sent (left side / plain bubbles)\n\n"
+    "For media: use [image], [video], [voice note], [sticker], [GIF], "
+    "[link: url], [shared post] as placeholders.\n"
+    "If a message is a reply to another, add \"reply_to\": \"quoted text\".\n"
+    "If no chat is visible, return [].\n\n"
+    "IMPORTANT: Do NOT truncate. Output EVERY single message you can see."
+)
+
+CHAT_READER_BATCH_PROMPT = (
+    "These {count} screenshots/videos show the SAME chat conversation. "
+    "They are in ORDER — the first image is the top/oldest part of the chat, "
+    "the last image is the bottom/newest part. Some images may overlap "
+    "(showing some of the same messages). That's fine — just deduplicate.\n\n"
+    "Your job: combine ALL the images into ONE complete, unified transcript. "
+    "Extract EVERY message EXACTLY as written — word-for-word, including all "
+    "emojis, slang, abbreviations, and typos. Do NOT skip, summarize, or "
+    "paraphrase any message.\n\n"
+    "Return a JSON array of ALL messages from the ENTIRE conversation, "
+    "in chronological order (oldest first):\n"
+    "[{{\"speaker\":\"me\",\"text\":\"exact message text\"}}, "
+    "{{\"speaker\":\"them\",\"text\":\"exact message text\"}}]\n\n"
+    "speaker = \"me\" for messages I sent (right side / colored bubbles)\n"
+    "speaker = \"them\" for messages they sent (left side / plain bubbles)\n\n"
+    "For media: use [image], [video], [voice note], [sticker], [GIF], "
+    "[link: url], [shared post] as placeholders.\n"
+    "If a message is a reply to another, add \"reply_to\": \"quoted text\".\n\n"
+    "IMPORTANT: Do NOT truncate. Output the COMPLETE transcript from ALL images."
 )
 
 DEFAULT_STYLE = "balanced"
@@ -95,7 +85,7 @@ REPLY_SYSTEM_PROMPT = (
     "1. A quick read of the situation — what's happening, what's her energy, "
     "what's working, what to watch out for.\n"
     "2. Your advice — what's the move here and why.\n"
-    "3. Several reply options I can send, with a brief explanation of why "
+    "3. Exactly 5 reply options I can send, with a brief explanation of why "
     "each one works. Label each option with a short name.\n\n"
     "Be real, be specific to THIS conversation. Don't be generic. "
     "Reference the patterns from the transcripts you learned from. "

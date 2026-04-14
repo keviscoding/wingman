@@ -1,7 +1,7 @@
 (() => {
-  const micBtn = document.getElementById("micBtn");
-  const micIcon = document.getElementById("micIcon");
-  const micLabel = document.getElementById("micLabel");
+  const readBtn = document.getElementById("readBtn");
+  const readIcon = document.getElementById("readIcon");
+  const readLabel = document.getElementById("readLabel");
   const coachSection = document.getElementById("coachSection");
   const coachRead = document.getElementById("coachRead");
   const coachAdvice = document.getElementById("coachAdvice");
@@ -18,7 +18,6 @@
   const regenBtn = document.getElementById("regenBtn");
   const presetSelect = document.getElementById("presetSelect");
   const addPresetBtn = document.getElementById("addPresetBtn");
-  const extraContextEl = document.getElementById("extraContext");
   const toastEl = document.getElementById("toast");
 
   const trainingBar = document.getElementById("trainingBar");
@@ -26,137 +25,327 @@
   const trainingIcon = document.getElementById("trainingIcon");
   const uploadInput = document.getElementById("uploadInput");
 
+  const readContactInput = document.getElementById("readContactInput");
+  const readExtraContext = document.getElementById("readExtraContext");
+  const readingContactBar = document.getElementById("readingContactBar");
+
+  // Headless-only elements
   const contactInput = document.getElementById("contactInput");
   const screenshotInput = document.getElementById("screenshotInput");
   const uploadPreview = document.getElementById("uploadPreview");
   const analyzeBtn = document.getElementById("analyzeBtn");
   const analyzeBtnText = document.getElementById("analyzeBtnText");
+  const extraContextEl = document.getElementById("extraContext");
+  const uploadSection = document.getElementById("uploadSection");
 
-  const screenshareBtn = document.getElementById("screenshareBtn");
-  const screenshareActive = document.getElementById("screenshareActive");
-  const screenshareVideo = document.getElementById("screenshareVideo");
-  const frameCountEl = document.getElementById("frameCount");
-  const captureToggle = document.getElementById("captureToggle");
-  const stopShareBtn = document.getElementById("stopShareBtn");
+  function isMobileHost() {
+    return document.documentElement.classList.contains("headless-mobile");
+  }
 
-  let ws = null, reconnectTimer = null, micMuted = false, isHeadless = false;
+  /** Contact / context for screenshot uploads (headless uses upload section fields). */
+  function contactForUpload() {
+    if (isMobileHost() && contactInput) return contactInput.value.trim();
+    return readContactInput ? readContactInput.value.trim() : "";
+  }
+
+  function extraForUpload() {
+    if (isMobileHost() && extraContextEl) return extraContextEl.value.trim();
+    return readExtraContext ? readExtraContext.value.trim() : "";
+  }
+
+  let ws = null, reconnectTimer = null, isHeadless = false;
+  let isReading = false;
   let pendingFiles = [];
+  let lastSoundState = "idle";
 
-  // ── Screen share state ─────────────────────────────────────────────
-
-  let mediaStream = null;
-  let capturedFrames = [];
-  let isCapturing = false;
-  let captureInterval = null;
-  const MAX_FRAMES = 30;
-  const CAPTURE_FPS = 1;
-
-  const isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-  const screenshareBox = document.getElementById("screenshareBox");
-
-  if (!isMobile && navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
-    screenshareBox.classList.remove("hidden");
+  if (isMobileHost()) {
+    isHeadless = true;
+    readBtn.style.display = "none";
+    if (readingContactBar) readingContactBar.style.display = "none";
+    if (previewSection) previewSection.style.display = "none";
+    if (uploadSection) uploadSection.style.display = "";
+    if (trainingBar) trainingBar.style.display = "none";
+    statusText.textContent = "Upload chat screenshots to get started";
   }
 
-  screenshareBtn.addEventListener("click", startScreenShare);
-  stopShareBtn.addEventListener("click", stopScreenShare);
-  captureToggle.addEventListener("click", toggleCapture);
+  // ── Sound effects (Web Audio API) ─────────────────────────────────
 
-  async function startScreenShare() {
-    try {
-      mediaStream = await navigator.mediaDevices.getDisplayMedia({
-        video: { width: { ideal: 1080 }, height: { ideal: 1920 } },
-        audio: false,
-      });
+  let audioCtx = null;
 
-      screenshareVideo.srcObject = mediaStream;
-      screenshareBtn.style.display = "none";
-      screenshareActive.classList.remove("hidden");
+  function ensureAudio() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    return audioCtx;
+  }
 
-      mediaStream.getVideoTracks()[0].onended = () => stopScreenShare();
+  document.addEventListener("click", ensureAudio, { once: true });
+  document.addEventListener("keydown", ensureAudio, { once: true });
+  document.addEventListener("touchstart", ensureAudio, { once: true });
 
-      capturedFrames = [];
-      updateFrameCount();
-      startCapture();
-    } catch (e) {
-      console.log("Screen share cancelled or failed:", e);
+  function playStartSound() {
+    const ctx = ensureAudio();
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(523, now);
+    osc.frequency.setValueAtTime(659, now + 0.1);
+    osc.frequency.setValueAtTime(784, now + 0.2);
+    gain.gain.setValueAtTime(0.25, now);
+    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
+    osc.start(now);
+    osc.stop(now + 0.4);
+  }
+
+  function playDoneSound() {
+    const ctx = ensureAudio();
+    const now = ctx.currentTime;
+    [784, 1047].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = "sine";
+      const t = now + i * 0.15;
+      osc.frequency.setValueAtTime(freq, t);
+      gain.gain.setValueAtTime(0.28, t);
+      gain.gain.exponentialRampToValueAtTime(0.01, t + 0.35);
+      osc.start(t);
+      osc.stop(t + 0.35);
+    });
+  }
+
+  function playRepliesReady() {
+    const ctx = ensureAudio();
+    const now = ctx.currentTime;
+    [523, 659, 784, 1047].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = "triangle";
+      const t = now + i * 0.1;
+      osc.frequency.setValueAtTime(freq, t);
+      gain.gain.setValueAtTime(0.2, t);
+      gain.gain.exponentialRampToValueAtTime(0.01, t + 0.25);
+      osc.start(t);
+      osc.stop(t + 0.25);
+    });
+  }
+
+  function playBeep(freq = 880, dur = 0.12) {
+    const ctx = ensureAudio();
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(freq, now);
+    gain.gain.setValueAtTime(0.3, now);
+    gain.gain.exponentialRampToValueAtTime(0.01, now + dur);
+    osc.start(now);
+    osc.stop(now + dur);
+  }
+
+  let countdownActive = false;
+
+  async function startCountdownRead(contact, context) {
+    if (countdownActive || isReading) return;
+    countdownActive = true;
+
+    // Phase 1: Navigate countdown (3-2-1, go to the chat)
+    for (let i = 3; i >= 1; i--) {
+      statusText.textContent = `Go to the chat... ${i}`;
+      statusBanner.classList.add("active");
+      playBeep(660, 0.1);
+      await new Promise(r => setTimeout(r, 1000));
     }
-  }
 
-  function stopScreenShare() {
-    stopCapture();
-    if (mediaStream) {
-      mediaStream.getTracks().forEach(t => t.stop());
-      mediaStream = null;
+    // Start reading
+    playStartSound();
+    send({ action: "start_reading", contact, context });
+    setReadingState(true);
+    statusText.textContent = "Reading...";
+
+    // Phase 2: Capture countdown (3 seconds to capture the screen)
+    for (let i = 3; i >= 1; i--) {
+      statusText.textContent = `Capturing... ${i}`;
+      playBeep(880, 0.08);
+      await new Promise(r => setTimeout(r, 1000));
     }
-    screenshareVideo.srcObject = null;
-    screenshareActive.classList.add("hidden");
-    screenshareBtn.style.display = "";
-    updateAnalyzeBtn();
+
+    // Auto-stop
+    send({ action: "stop_reading" });
+    playDoneSound();
+    setReadingState(false);
+    statusText.textContent = "Done — processing...";
+    countdownActive = false;
   }
 
-  function startCapture() {
-    if (isCapturing) return;
-    isCapturing = true;
-    captureToggle.textContent = "\u23F9 Stop capture";
-    captureToggle.classList.add("capturing");
-    captureToggle.classList.remove("paused");
+  // ── Theme toggle ──────────────────────────────────────────────────
 
-    captureInterval = setInterval(() => {
-      if (!mediaStream || !screenshareVideo.videoWidth) return;
-      grabFrame();
-    }, 1000 / CAPTURE_FPS);
-  }
+  const themeBtn = document.getElementById("themeBtn");
+  const savedTheme = localStorage.getItem("wingman-theme") || "dark";
+  if (savedTheme === "light") document.documentElement.setAttribute("data-theme", "light");
+  updateThemeBtn();
 
-  function stopCapture() {
-    isCapturing = false;
-    if (captureInterval) {
-      clearInterval(captureInterval);
-      captureInterval = null;
+  themeBtn.addEventListener("click", () => {
+    const isLight = document.documentElement.getAttribute("data-theme") === "light";
+    if (isLight) {
+      document.documentElement.removeAttribute("data-theme");
+      localStorage.setItem("wingman-theme", "dark");
+    } else {
+      document.documentElement.setAttribute("data-theme", "light");
+      localStorage.setItem("wingman-theme", "light");
     }
-    captureToggle.textContent = "\u25CF Resume";
-    captureToggle.classList.remove("capturing");
-    captureToggle.classList.add("paused");
-  }
-
-  function toggleCapture() {
-    if (isCapturing) stopCapture();
-    else startCapture();
-  }
-
-  function grabFrame() {
-    const canvas = document.createElement("canvas");
-    const vw = screenshareVideo.videoWidth;
-    const vh = screenshareVideo.videoHeight;
-    const scale = Math.min(1080 / vw, 1);
-    canvas.width = Math.round(vw * scale);
-    canvas.height = Math.round(vh * scale);
-    const ctx = canvas.getContext("2d");
-    ctx.drawImage(screenshareVideo, 0, 0, canvas.width, canvas.height);
-
-    canvas.toBlob((blob) => {
-      if (!blob) return;
-      capturedFrames.push(blob);
-      if (capturedFrames.length > MAX_FRAMES) capturedFrames.shift();
-      updateFrameCount();
-      updateAnalyzeBtn();
-    }, "image/jpeg", 0.85);
-  }
-
-  function updateFrameCount() {
-    const n = capturedFrames.length;
-    frameCountEl.textContent = `${n} frame${n !== 1 ? "s" : ""} captured`;
-  }
-
-  // ── Screenshot upload ──────────────────────────────────────────────
-
-  screenshotInput.addEventListener("change", () => {
-    pendingFiles = Array.from(screenshotInput.files);
-    renderUploadPreview();
-    updateAnalyzeBtn();
+    updateThemeBtn();
   });
 
+  function updateThemeBtn() {
+    const isLight = document.documentElement.getAttribute("data-theme") === "light";
+    themeBtn.textContent = isLight ? "\u263E" : "\u2606";
+    themeBtn.title = isLight ? "Switch to dark mode" : "Switch to light mode";
+  }
+
+  // ── Start Reading / Done button ───────────────────────────────────
+
+  // ── Drop zone for screenshots ──────────────────────────────────
+
+  const dropZone = document.getElementById("dropZone");
+  const dropZoneInner = document.getElementById("dropZoneInner");
+  const dropPreview = document.getElementById("dropPreview");
+  const dropFileInput = document.getElementById("dropFileInput");
+  const dropAnalyzeBtn = document.getElementById("dropAnalyzeBtn");
+  let dropFiles = [];
+
+  ["dragenter", "dragover"].forEach(evt => {
+    dropZoneInner.addEventListener(evt, (e) => {
+      e.preventDefault();
+      dropZone.classList.add("dragover");
+    });
+  });
+  ["dragleave", "drop"].forEach(evt => {
+    dropZoneInner.addEventListener(evt, () => dropZone.classList.remove("dragover"));
+  });
+
+  dropZoneInner.addEventListener("drop", (e) => {
+    e.preventDefault();
+    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith("image/") || f.type.startsWith("video/"));
+    if (files.length) {
+      dropFiles.push(...files);
+      renderDropPreview();
+    }
+  });
+
+  dropFileInput.addEventListener("change", () => {
+    dropFiles.push(...Array.from(dropFileInput.files));
+    dropFileInput.value = "";
+    renderDropPreview();
+  });
+
+  function renderDropPreview() {
+    dropPreview.innerHTML = "";
+    dropFiles.forEach((f, i) => {
+      let el;
+      if (f.type.startsWith("video/")) {
+        el = document.createElement("video");
+        el.src = URL.createObjectURL(f);
+        el.muted = true;
+      } else {
+        el = document.createElement("img");
+        el.src = URL.createObjectURL(f);
+      }
+      el.title = `${f.name} — click to remove`;
+      el.addEventListener("click", () => {
+        dropFiles.splice(i, 1);
+        renderDropPreview();
+      });
+      dropPreview.appendChild(el);
+    });
+    dropAnalyzeBtn.classList.toggle("hidden", dropFiles.length === 0);
+    const label = dropFiles.length === 1 ? "1 file" : `${dropFiles.length} files`;
+    dropAnalyzeBtn.textContent = `Analyze ${label}`;
+  }
+
+  dropAnalyzeBtn.addEventListener("click", async () => {
+    if (!dropFiles.length) return;
+
+    dropAnalyzeBtn.disabled = true;
+    dropAnalyzeBtn.textContent = "Reading...";
+
+    const fd = new FormData();
+    dropFiles.forEach(f => fd.append("files", f));
+    fd.append("contact", contactForUpload());
+    fd.append("extra_context", extraForUpload());
+
+    try {
+      const r = await fetch("/api/upload-screenshots", { method: "POST", body: fd });
+      const d = await r.json();
+      if (d.error) {
+        dropAnalyzeBtn.textContent = d.error;
+        setTimeout(() => renderDropPreview(), 2000);
+      } else {
+        dropFiles = [];
+        dropPreview.innerHTML = "";
+        dropAnalyzeBtn.classList.add("hidden");
+        if (d.contact) {
+          if (readContactInput) readContactInput.value = d.contact;
+          if (contactInput) contactInput.value = d.contact;
+        }
+      }
+    } catch (e) {
+      dropAnalyzeBtn.textContent = "Upload failed — try again";
+    }
+    dropAnalyzeBtn.disabled = false;
+  });
+
+  // ── Start Reading / Done button ───────────────────────────────────
+
+  readBtn.addEventListener("click", () => {
+    if (isReading) {
+      send({ action: "stop_reading" });
+      playDoneSound();
+      setReadingState(false);
+      countdownActive = false;
+    } else {
+      const contact = readContactInput ? readContactInput.value.trim() : "";
+      const context = readExtraContext ? readExtraContext.value.trim() : "";
+      startCountdownRead(contact, context);
+    }
+  });
+
+  function setReadingState(reading) {
+    isReading = reading;
+    if (reading) {
+      readBtn.classList.add("active");
+      readIcon.textContent = "\u2713";
+      readLabel.textContent = "Done";
+      addToggle.textContent = "\u2713 Done";
+      addToggle.classList.add("active");
+    } else {
+      readBtn.classList.remove("active");
+      readIcon.textContent = "\uD83D\uDC41";
+      readLabel.textContent = "Start Reading";
+      addToggle.textContent = "+ Add new";
+      addToggle.classList.remove("active");
+    }
+  }
+
+  // ── Screenshot upload (headless only) ─────────────────────────────
+
+  if (screenshotInput) {
+    screenshotInput.addEventListener("change", () => {
+      pendingFiles = Array.from(screenshotInput.files);
+      renderUploadPreview();
+      updateAnalyzeBtn();
+    });
+  }
+
   function renderUploadPreview() {
+    if (!uploadPreview) return;
     uploadPreview.innerHTML = "";
     if (!pendingFiles.length) return;
     pendingFiles.forEach((f, i) => {
@@ -165,7 +354,7 @@
       img.title = f.name;
       img.addEventListener("click", () => {
         pendingFiles.splice(i, 1);
-        screenshotInput.value = "";
+        if (screenshotInput) screenshotInput.value = "";
         renderUploadPreview();
         updateAnalyzeBtn();
       });
@@ -174,80 +363,53 @@
   }
 
   function updateAnalyzeBtn() {
-    const hasFrames = capturedFrames.length > 0;
-    const hasFiles = pendingFiles.length > 0;
-
-    if (hasFrames || hasFiles) {
+    if (!analyzeBtn) return;
+    if (pendingFiles.length > 0) {
       analyzeBtn.disabled = false;
-      if (hasFrames && !hasFiles) {
-        analyzeBtnText.textContent = `Analyze ${capturedFrames.length} frame${capturedFrames.length > 1 ? "s" : ""}`;
-      } else if (hasFiles) {
-        analyzeBtnText.textContent = `Analyze ${pendingFiles.length} screenshot${pendingFiles.length > 1 ? "s" : ""}`;
-      }
+      analyzeBtnText.textContent = `Analyze ${pendingFiles.length} screenshot${pendingFiles.length > 1 ? "s" : ""}`;
     } else {
       analyzeBtn.disabled = true;
-      analyzeBtnText.textContent = "Upload screenshots first";
+      analyzeBtnText.textContent = "Select screenshots";
     }
   }
 
-  analyzeBtn.addEventListener("click", async () => {
-    const hasFrames = capturedFrames.length > 0;
-    const hasFiles = pendingFiles.length > 0;
-    if (!hasFrames && !hasFiles) return;
+  if (analyzeBtn) {
+    analyzeBtn.addEventListener("click", async () => {
+      if (!pendingFiles.length) return;
 
-    if (isCapturing) stopCapture();
-
-    const fd = new FormData();
-
-    if (hasFrames) {
-      const uniqueFrames = deduplicateFrames(capturedFrames);
-      uniqueFrames.forEach((blob, i) =>
-        fd.append("files", blob, `frame_${i}.jpg`)
-      );
-    }
-    if (hasFiles) {
+      const fd = new FormData();
       pendingFiles.forEach(f => fd.append("files", f));
-    }
+      fd.append("contact", contactInput ? contactInput.value.trim() : "");
+      fd.append("extra_context", extraContextEl ? extraContextEl.value.trim() : "");
 
-    fd.append("contact", contactInput.value.trim());
-    fd.append("extra_context", extraContextEl.value.trim());
+      analyzeBtn.disabled = true;
+      analyzeBtn.classList.add("processing");
+      analyzeBtnText.textContent = "Processing...";
 
-    analyzeBtn.disabled = true;
-    analyzeBtn.classList.add("processing");
-    analyzeBtnText.textContent = "Processing...";
-
-    try {
-      const r = await fetch("/api/upload-screenshots", { method: "POST", body: fd });
-      const d = await r.json();
-      if (d.error) {
-        analyzeBtnText.textContent = d.error;
+      try {
+        const r = await fetch("/api/upload-screenshots", { method: "POST", body: fd });
+        const d = await r.json();
+        if (d.error) {
+          analyzeBtnText.textContent = d.error;
+          analyzeBtn.classList.remove("processing");
+          setTimeout(() => updateAnalyzeBtn(), 2000);
+        } else {
+          const n = d.files ?? 1;
+          analyzeBtnText.textContent = `Reading ${n} file${n > 1 ? "s" : ""}...`;
+          if (d.contact) {
+            if (contactInput) contactInput.value = d.contact;
+            if (readContactInput) readContactInput.value = d.contact;
+          }
+        }
+      } catch (e) {
+        analyzeBtnText.textContent = "Upload failed — try again";
         analyzeBtn.classList.remove("processing");
-        setTimeout(() => updateAnalyzeBtn(), 2000);
-      } else {
-        analyzeBtnText.textContent = `Reading ${d.screenshots} frame${d.screenshots > 1 ? "s" : ""}...`;
-        if (d.contact) contactInput.value = d.contact;
+        analyzeBtn.disabled = false;
       }
-    } catch (e) {
-      analyzeBtnText.textContent = "Upload failed — try again";
-      analyzeBtn.classList.remove("processing");
-      analyzeBtn.disabled = false;
-    }
-  });
-
-  function deduplicateFrames(frames) {
-    if (frames.length <= 10) return frames;
-    const step = Math.max(1, Math.floor(frames.length / 10));
-    const picked = [];
-    for (let i = 0; i < frames.length; i += step) {
-      picked.push(frames[i]);
-    }
-    if (picked[picked.length - 1] !== frames[frames.length - 1]) {
-      picked.push(frames[frames.length - 1]);
-    }
-    return picked;
+    });
   }
 
-  // ── WebSocket ──────────────────────────────────────────────────────
+  // ── WebSocket ─────────────────────────────────────────────────────
 
   function connect() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -272,22 +434,27 @@
     try {
       const d = await (await fetch("/api/state")).json();
       handleStatus(d);
-      if (d.transcript && d.transcript.length) renderTranscript(d.transcript);
+      if (d.transcript) renderTranscript(d.transcript);
       if (d.replies && d.replies.length) renderReplies(d.replies, d.read, d.advice);
     } catch {}
   }, 2000);
 
   setInterval(() => {
-    if (!isHeadless && !mediaStream) previewImg.src = "/frame.jpg?t=" + Date.now();
+    if (!isHeadless) previewImg.src = "/frame.jpg?t=" + Date.now();
   }, 2000);
 
-  // ── Status ─────────────────────────────────────────────────────────
+  // ── Status ────────────────────────────────────────────────────────
 
-  const msgs = {
-    idle: isMobile
-      ? "Upload chat screenshots to get started"
-      : "Share your screen or upload screenshots",
+  const desktopMsgs = {
+    idle: 'Say "read this" or click Start Reading while looking at a chat',
+    collecting: "Reading chat — keep scrolling...",
+    generating: "Generating reply options...",
+    done: 'Done! Say "read this" for another chat.',
+  };
+  const headlessMsgs = {
+    idle: "Upload chat screenshots to get started",
     processing: "Reading the chat...",
+    collecting: "Reading the chat...",
     generating: "Generating reply options...",
     done: "Done! Upload more screenshots for another chat.",
   };
@@ -296,37 +463,55 @@
     const state = s.status || s.state || "idle";
     isHeadless = s.headless || false;
 
-    statusText.textContent = msgs[state] || state;
+    const msgs = isHeadless ? headlessMsgs : desktopMsgs;
+    let statusMsg = msgs[state] || state;
+    if (state === "collecting" && s.collecting_count) {
+      statusMsg = `Reading — ${s.collecting_count} messages so far. Keep scrolling, click Done when finished.`;
+    }
+    statusText.textContent = statusMsg;
     statusBanner.classList.toggle("active", state !== "idle");
+    statusBanner.classList.toggle("collecting", state === "collecting");
+
+    // Sound effects on state transitions
+    if (state !== lastSoundState) {
+      if (state === "collecting" && lastSoundState !== "collecting") playStartSound();
+      if (lastSoundState === "collecting" && state !== "collecting") playDoneSound();
+      if (state === "done" && lastSoundState === "generating") playRepliesReady();
+      lastSoundState = state;
+    }
+
+    // Sync reading button state with server
+    if (state === "collecting" && !isReading) setReadingState(true);
+    if (state !== "collecting" && isReading) setReadingState(false);
 
     if (isHeadless) {
-      micBtn.classList.add("hidden-headless");
+      readBtn.style.display = "none";
+      if (readingContactBar) readingContactBar.style.display = "none";
       if (previewSection) previewSection.style.display = "none";
+      if (uploadSection) uploadSection.style.display = "";
     } else {
-      micBtn.classList.remove("hidden-headless");
+      readBtn.style.display = "";
+      if (readingContactBar) readingContactBar.style.display = "";
       if (previewSection) previewSection.style.display = "";
+      if (uploadSection) uploadSection.style.display = "none";
     }
 
     if (state === "done" || state === "idle") {
-      analyzeBtn.classList.remove("processing");
-      if (state === "done") {
-        capturedFrames = [];
-        pendingFiles = [];
-        screenshotInput.value = "";
-        uploadPreview.innerHTML = "";
-        updateFrameCount();
+      if (analyzeBtn) {
+        analyzeBtn.classList.remove("processing");
+        if (state === "done") {
+          pendingFiles = [];
+          if (screenshotInput) screenshotInput.value = "";
+          if (uploadPreview) uploadPreview.innerHTML = "";
+        }
+        updateAnalyzeBtn();
       }
-      updateAnalyzeBtn();
     }
-
-    micMuted = s.mic_muted || false;
-    micBtn.classList.toggle("muted", micMuted);
-    micIcon.textContent = micMuted ? "\u23F8" : "\uD83C\uDFA4";
-    micLabel.textContent = micMuted ? "Paused" : "Listening";
 
     if (s.contact) {
       contactLabel.textContent = "Chat with " + s.contact;
-      if (!contactInput.value.trim()) contactInput.value = s.contact;
+      if (readContactInput && !readContactInput.value.trim()) readContactInput.value = s.contact;
+      if (contactInput && !contactInput.value.trim()) contactInput.value = s.contact;
     } else {
       contactLabel.textContent = "";
     }
@@ -334,15 +519,30 @@
     if (s.contacts && s.contacts.length) {
       contactsList.innerHTML = s.contacts.map(c =>
         `<div class="contact-item${c === s.contact ? " active" : ""}" data-contact="${esc(c)}">` +
-        `<span>${esc(c)}</span>` +
-        `<span class="contact-delete" data-del="${esc(c)}" title="Delete chat">\u2715</span></div>`
+        `<span class="contact-name">${esc(c)}</span>` +
+        `<span class="contact-actions">` +
+        `<span class="contact-rename" data-rename="${esc(c)}" title="Rename">&#9998;</span>` +
+        `<span class="contact-delete" data-del="${esc(c)}" title="Delete">\u2715</span>` +
+        `</span></div>`
       ).join("");
       contactsList.querySelectorAll(".contact-item").forEach(el => {
         el.addEventListener("click", (e) => {
-          if (e.target.classList.contains("contact-delete")) return;
+          if (e.target.classList.contains("contact-delete") || e.target.classList.contains("contact-rename")) return;
           const contact = el.dataset.contact;
-          contactInput.value = contact;
+          if (readContactInput) readContactInput.value = contact;
+          if (contactInput) contactInput.value = contact;
+          lastTranscriptCount = 0;
           send({ action: "load_contact", contact });
+        });
+      });
+      contactsList.querySelectorAll(".contact-rename").forEach(el => {
+        el.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const oldName = el.dataset.rename;
+          const newName = prompt("Rename chat:", oldName);
+          if (newName && newName.trim() && newName.trim() !== oldName) {
+            send({ action: "rename_contact", old_name: oldName, new_name: newName.trim() });
+          }
         });
       });
       contactsList.querySelectorAll(".contact-delete").forEach(el => {
@@ -380,11 +580,21 @@
     }
   }
 
-  // ── Rendering ──────────────────────────────────────────────────────
+  // ── Rendering ─────────────────────────────────────────────────────
+
+  let lastTranscriptCount = 0;
 
   function renderTranscript(messages) {
-    if (!messages || !messages.length) return;
+    if (!messages || !messages.length) {
+      transcriptEl.innerHTML = "";
+      msgCountEl.textContent = "";
+      lastTranscriptCount = 0;
+      return;
+    }
     results.classList.remove("hidden");
+    const prevCount = lastTranscriptCount;
+    lastTranscriptCount = messages.length;
+    if (messages.length === prevCount) return;
     msgCountEl.textContent = `(${messages.length})`;
     transcriptEl.innerHTML = messages.map((m, i) => {
       const replyHtml = m.reply_to
@@ -420,7 +630,10 @@
       });
     });
 
-    transcriptEl.scrollTop = transcriptEl.scrollHeight;
+    const wasNearBottom = transcriptEl.scrollHeight - transcriptEl.scrollTop - transcriptEl.clientHeight < 80;
+    if (wasNearBottom || prevCount === 0) {
+      transcriptEl.scrollTop = transcriptEl.scrollHeight;
+    }
   }
 
   function formatMedia(text) {
@@ -442,7 +655,7 @@
     if (!options || !options.length) return;
     results.classList.remove("hidden");
 
-    if (read || advice) {
+    if ((read || advice) && !isMobileHost()) {
       coachRead.textContent = read || "";
       coachAdvice.textContent = advice ? "\u2192 " + advice : "";
       coachSection.classList.remove("hidden");
@@ -475,18 +688,20 @@
     setTimeout(() => toastEl.classList.remove("show"), 1500);
   }
 
-  // ── Events ─────────────────────────────────────────────────────────
+  // ── Events ────────────────────────────────────────────────────────
 
-  micBtn.addEventListener("click", () => {
-    send({ action: micMuted ? "resume" : "pause" });
-  });
+  const extraRequestInput = document.getElementById("extraRequestInput");
 
   regenBtn.addEventListener("click", () => {
+    const extraRequest = extraRequestInput ? extraRequestInput.value.trim() : "";
+    const baseContext = extraForUpload();
+    const combined = [baseContext, extraRequest].filter(Boolean).join("\n");
     send({
       action: "regenerate",
       preset: parseInt(presetSelect.value),
-      extra_context: extraContextEl.value.trim(),
+      extra_context: combined,
     });
+    if (extraRequestInput) extraRequestInput.value = "";
   });
 
   presetSelect.addEventListener("change", () => {
@@ -500,6 +715,139 @@
       "Goal is to get her invested and set up a date this week");
     if (!instr) return;
     send({ action: "add_preset", name: name, instruction: instr });
+  });
+
+  // ── Add new dropdown (read screen or screenshot) ─────────────────
+
+  const addToggle = document.getElementById("addToggle");
+  const addMenu = document.getElementById("addMenu");
+  const addReadScreen = document.getElementById("addReadScreen");
+  const addScreenshotInput = document.getElementById("addScreenshotInput");
+
+  addToggle.addEventListener("click", () => {
+    if (isReading) {
+      send({ action: "stop_reading" });
+      playDoneSound();
+      setReadingState(false);
+      return;
+    }
+    addMenu.classList.toggle("hidden");
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest("#addDropdown")) addMenu.classList.add("hidden");
+  });
+
+  addReadScreen.addEventListener("click", () => {
+    addMenu.classList.add("hidden");
+    const contact = contactForUpload();
+    const context = extraForUpload();
+    startCountdownRead(contact, context);
+  });
+
+  addScreenshotInput.addEventListener("change", async () => {
+    addMenu.classList.add("hidden");
+    const files = Array.from(addScreenshotInput.files);
+    if (!files.length) return;
+
+    addToggle.classList.add("processing");
+    addToggle.textContent = "Reading...";
+
+    const fd = new FormData();
+    files.forEach(f => fd.append("files", f));
+    fd.append("contact", contactForUpload());
+    fd.append("extra_context", extraForUpload());
+
+    try {
+      const r = await fetch("/api/upload-screenshots", { method: "POST", body: fd });
+      const d = await r.json();
+      if (d.error) {
+        statusText.textContent = d.error;
+        setTimeout(() => { statusText.textContent = ""; }, 2000);
+      }
+    } catch (e) {
+      statusText.textContent = "Upload failed";
+    }
+
+    addScreenshotInput.value = "";
+    addToggle.classList.remove("processing");
+    addToggle.textContent = "+ Add new";
+  });
+
+  // ── Drag-and-drop strip below transcript ─────────────────────────
+
+  const addDropStrip = document.getElementById("addDropStrip");
+  const addDropFileInput = document.getElementById("addDropFileInput");
+
+  addDropStrip.addEventListener("click", () => addDropFileInput.click());
+
+  ["dragenter", "dragover"].forEach(evt => {
+    addDropStrip.addEventListener(evt, (e) => {
+      e.preventDefault();
+      addDropStrip.classList.add("dragover");
+    });
+  });
+  ["dragleave", "drop"].forEach(evt => {
+    addDropStrip.addEventListener(evt, () => addDropStrip.classList.remove("dragover"));
+  });
+
+  addDropStrip.addEventListener("drop", (e) => {
+    e.preventDefault();
+    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith("image/") || f.type.startsWith("video/"));
+    if (files.length) uploadAddFiles(files);
+  });
+
+  addDropFileInput.addEventListener("change", () => {
+    const files = Array.from(addDropFileInput.files);
+    addDropFileInput.value = "";
+    if (files.length) uploadAddFiles(files);
+  });
+
+  async function uploadAddFiles(files) {
+    addDropStrip.classList.add("uploading");
+    addDropStrip.querySelector(".add-drop-label").textContent = `Reading ${files.length} file${files.length > 1 ? "s" : ""}...`;
+
+    const fd = new FormData();
+    files.forEach(f => fd.append("files", f));
+    fd.append("contact", contactForUpload());
+    fd.append("extra_context", extraForUpload());
+
+    try {
+      const r = await fetch("/api/upload-screenshots", { method: "POST", body: fd });
+      const d = await r.json();
+      if (d.error) {
+        addDropStrip.querySelector(".add-drop-label").textContent = d.error;
+        setTimeout(() => resetDropStrip(), 2000);
+      } else {
+        addDropStrip.querySelector(".add-drop-label").textContent = "Processing...";
+      }
+    } catch (e) {
+      addDropStrip.querySelector(".add-drop-label").textContent = "Upload failed";
+      setTimeout(() => resetDropStrip(), 2000);
+    }
+    addDropStrip.classList.remove("uploading");
+    resetDropStrip();
+  }
+
+  function resetDropStrip() {
+    addDropStrip.querySelector(".add-drop-label").textContent = "Drop screenshots here to add";
+  }
+
+  // ── New Chat button ──────────────────────────────────────────────
+
+  document.getElementById("newChatBtn").addEventListener("click", () => {
+    send({ action: "new_chat" });
+    if (readContactInput) readContactInput.value = "";
+    if (readExtraContext) readExtraContext.value = "";
+    if (contactInput) contactInput.value = "";
+    if (extraContextEl) extraContextEl.value = "";
+    lastTranscriptCount = 0;
+    transcriptEl.innerHTML = "";
+    repliesEl.innerHTML = "";
+    msgCountEl.textContent = "";
+    contactLabel.textContent = "";
+    coachSection.classList.add("hidden");
+    results.classList.add("hidden");
   });
 
   uploadInput.addEventListener("change", async () => {

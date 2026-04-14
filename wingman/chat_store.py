@@ -51,6 +51,15 @@ class ChatStore:
         }
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
 
+    def save_raw(self, contact: str, messages: list[dict]):
+        """Save messages that are already dicts (not Message objects)."""
+        path = self._path(contact)
+        data = {
+            "contact": contact,
+            "messages": messages,
+        }
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+
     def delete(self, contact: str):
         path = self._path(contact)
         if path.exists():

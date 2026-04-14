@@ -1,0 +1,320 @@
+/* Hosted / headless (DigitalOcean, Safari) — iPhone-first layout.
+   Loaded only when server sets <html class="headless-mobile">. Local desktop is unchanged. */
+
+html.headless-mobile {
+  -webkit-text-size-adjust: 100%;
+}
+
+html.headless-mobile body {
+  overflow-y: auto;
+  overflow-x: hidden;
+  height: auto;
+  min-height: 100dvh;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+html.headless-mobile #app {
+  height: auto;
+  min-height: 100dvh;
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 8px 14px calc(20px + env(safe-area-inset-bottom));
+  padding-top: calc(8px + env(safe-area-inset-top));
+}
+
+/* No live screen / desktop capture */
+html.headless-mobile #readBtn,
+html.headless-mobile #readingContactBar,
+html.headless-mobile #previewSection,
+html.headless-mobile #trainingBar {
+  display: none !important;
+}
+
+/* Coach / analysis de-emphasized on mobile */
+html.headless-mobile #coachSection {
+  display: none !important;
+}
+
+/* Header: room for theme only */
+html.headless-mobile header {
+  padding: 6px 0 10px;
+  border-bottom: 1px solid var(--border);
+}
+html.headless-mobile header h1 {
+  font-size: 15px;
+  letter-spacing: 2px;
+}
+
+html.headless-mobile .status-banner {
+  font-size: 13px;
+  padding: 10px 12px;
+  margin: 8px 0;
+  line-height: 1.35;
+}
+
+/* Upload block: contact + context only; drop zone is the primary add path */
+html.headless-mobile .upload-section .upload-row:has(#screenshotBtn) {
+  display: none !important;
+}
+html.headless-mobile #uploadPreview {
+  display: none !important;
+}
+html.headless-mobile #analyzeBtn {
+  display: none !important;
+}
+
+html.headless-mobile .upload-section {
+  gap: 12px;
+  padding: 14px;
+  margin-bottom: 8px;
+}
+
+html.headless-mobile .upload-section .contact-input {
+  font-size: 16px;
+  padding: 12px 14px;
+}
+
+html.headless-mobile .upload-section .context-input {
+  font-size: 16px;
+  min-height: 88px;
+  padding: 12px 14px;
+  line-height: 1.45;
+}
+
+/* Hero drop zone — drag-first; tap whole area still focuses browse via inner label */
+html.headless-mobile .drop-zone {
+  margin: 0 0 10px;
+}
+
+html.headless-mobile .drop-zone-inner {
+  flex-direction: column;
+  justify-content: center;
+  min-height: 168px;
+  padding: 22px 16px;
+  font-size: 15px;
+  line-height: 1.45;
+  text-align: center;
+  border-width: 2px;
+  border-radius: 16px;
+  touch-action: manipulation;
+}
+
+html.headless-mobile .drop-icon {
+  font-size: 36px;
+  line-height: 1;
+}
+
+html.headless-mobile .drop-text {
+  max-width: 280px;
+}
+
+html.headless-mobile .drop-preview {
+  gap: 8px;
+  margin-top: 10px;
+  justify-content: center;
+}
+
+html.headless-mobile .drop-preview img,
+html.headless-mobile .drop-preview video {
+  width: 72px;
+  height: 72px;
+  border-radius: 10px;
+}
+
+html.headless-mobile .drop-analyze-btn {
+  padding: 14px 16px;
+  font-size: 16px;
+  border-radius: 12px;
+  margin-top: 10px;
+}
+
+/* Saved chats + New — horizontal, thumb-friendly */
+html.headless-mobile .main-layout {
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+html.headless-mobile .contacts-sidebar {
+  width: 100%;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+html.headless-mobile .sidebar-header {
+  flex-shrink: 0;
+  margin-bottom: 0;
+  gap: 8px;
+}
+
+html.headless-mobile .contacts-sidebar h3 {
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+html.headless-mobile .new-chat-btn {
+  padding: 8px 14px;
+  font-size: 13px;
+  border-radius: 10px;
+}
+
+html.headless-mobile .contacts-list {
+  flex-direction: row;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+html.headless-mobile .contact-item {
+  flex-shrink: 0;
+  padding: 8px 14px;
+  font-size: 14px;
+  border-radius: 999px;
+}
+
+html.headless-mobile .content {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+html.headless-mobile .contact-label {
+  font-size: 15px;
+  margin: 6px 0 8px;
+}
+
+/* Stack transcript under replies — replies first (thumb zone) */
+html.headless-mobile .results {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: visible;
+}
+
+html.headless-mobile .replies-panel {
+  order: -1;
+  min-height: 0;
+  overflow: visible;
+}
+
+html.headless-mobile .transcript-panel {
+  order: 1;
+  min-height: 0;
+  max-height: 42vh;
+}
+
+html.headless-mobile .transcript-scroll {
+  max-height: 36vh;
+  min-height: 120px;
+}
+
+/* Transcript: hide screen-read flow; rely on drop strip + files */
+html.headless-mobile .transcript-header .add-dropdown {
+  display: none !important;
+}
+
+html.headless-mobile .transcript-header h2 {
+  font-size: 12px;
+}
+
+html.headless-mobile .add-drop-strip {
+  padding: 14px 12px;
+  font-size: 14px;
+  border-radius: 14px;
+  margin-top: 8px;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: manipulation;
+}
+
+/* Goals + regen */
+html.headless-mobile .presets-bar {
+  padding: 10px;
+  border-radius: 14px;
+  gap: 10px;
+}
+
+html.headless-mobile .presets-bar select {
+  font-size: 15px;
+  padding: 10px 12px;
+  border-radius: 10px;
+}
+
+html.headless-mobile .preset-add-btn {
+  font-size: 14px;
+  padding: 10px 14px;
+  border-radius: 10px;
+}
+
+html.headless-mobile .extra-request-input {
+  font-size: 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+}
+
+html.headless-mobile .replies-header h2 {
+  font-size: 13px;
+}
+
+html.headless-mobile .regen-btn {
+  font-size: 13px;
+  padding: 10px 14px;
+  border-radius: 10px;
+}
+
+html.headless-mobile .replies-grid {
+  gap: 12px;
+  padding-bottom: 8px;
+}
+
+html.headless-mobile .reply-card {
+  padding: 16px 16px 14px;
+  border-radius: 16px;
+}
+
+html.headless-mobile .reply-card .label {
+  font-size: 10px;
+  margin-bottom: 8px;
+}
+
+html.headless-mobile .reply-card .text {
+  font-size: 17px;
+  line-height: 1.45;
+}
+
+html.headless-mobile .reply-card .why {
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+html.headless-mobile .reply-card .hint {
+  opacity: 1;
+  font-size: 11px;
+  margin-top: 8px;
+}
+
+html.headless-mobile .msg {
+  font-size: 15px;
+  padding: 10px 14px;
+}
+
+html.headless-mobile .toast {
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  font-size: 14px;
+  padding: 10px 22px;
+}

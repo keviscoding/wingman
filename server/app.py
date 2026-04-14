@@ -10,7 +10,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from wingman.main import Wingman, HEADLESS
@@ -41,8 +41,9 @@ def _state() -> dict:
         "has_replies": len(w.latest_replies) > 0,
         "contact": w.current_contact,
         "contacts": w.saved_contacts,
-        "mic_muted": getattr(w.live, "mic_muted", False),
         "headless": w.headless,
+        "mic_muted": getattr(w.live, "mic_muted", False),
+        "collecting_count": w.collecting_count,
         "training_status": w.training.status,
         "training_files": w.training.file_count,
         "training_tokens": w.training.token_count,
@@ -101,7 +102,13 @@ app.add_middleware(
 
 @app.get("/")
 async def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    """Serve SPA; inject headless-only layout hooks when WINGMAN_HEADLESS is set (DO / Safari)."""
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    if HEADLESS:
+        html = html.replace("<html lang=\"en\">", "<html lang=\"en\" class=\"headless-mobile\">", 1)
+        inject = '  <link rel="stylesheet" href="/static/mobile.css?v=2">\n'
+        html = html.replace("</head>", inject + "</head>", 1)
+    return Response(content=html, media_type="text/html")
 
 
 @app.get("/api/state")
@@ -130,7 +137,6 @@ async def upload_training(files: list[UploadFile] = File(...)):
         saved.append(f.filename)
         print(f"[server] Saved training file: {f.filename} ({len(content):,} bytes)")
 
-    # Reload cache with new files
     if wingman and saved:
         success = wingman.training.load()
         if success:
@@ -146,29 +152,31 @@ async def upload_screenshots(
     contact: str = Form(""),
     extra_context: str = Form(""),
 ):
-    """Upload chat screenshots from mobile. Extracts messages and generates replies."""
+    """Upload chat screenshots and/or videos."""
     if not wingman:
         return {"error": "Wingman not ready"}
 
     if wingman.status in ("processing", "generating"):
         return {"error": "Already processing — wait for current analysis to finish"}
 
-    jpeg_images: list[bytes] = []
+    from wingman.chat_reader import ChatReader
+    media_items: list[tuple[bytes, str]] = []
     for f in files:
         data = await f.read()
-        jpeg_images.append(data)
-        print(f"[server] Received screenshot: {f.filename} ({len(data):,} bytes)")
+        mime = ChatReader.detect_mime(f.filename or "", data)
+        media_items.append((data, mime))
+        print(f"[server] Received: {f.filename} ({len(data):,} bytes, {mime})")
 
-    if not jpeg_images:
-        return {"error": "No images uploaded"}
+    if not media_items:
+        return {"error": "No files uploaded"}
 
     asyncio.create_task(
-        wingman.process_screenshots(contact, jpeg_images, extra_context)
+        wingman.process_media(contact, media_items, extra_context)
     )
 
     return {
         "status": "processing",
-        "screenshots": len(jpeg_images),
+        "files": len(media_items),
         "contact": contact or "Unknown",
     }
 
@@ -208,12 +216,24 @@ async def ws_endpoint(ws: WebSocket):
                 continue
             action = msg.get("action")
 
-            if action == "pause":
-                wingman.live.mic_muted = True
+            if action == "new_chat":
+                wingman.conversation.messages.clear()
+                wingman.latest_replies = []
+                wingman.latest_read = ""
+                wingman.latest_advice = ""
+                wingman.current_contact = ""
+                wingman.collecting_count = 0
+                wingman.transcript_version += 1
+                wingman.replies_version += 1
+                wingman.status = "idle"
                 wingman._bump()
-            elif action == "resume":
-                wingman.live.mic_muted = False
-                wingman._bump()
+                print("[server] New chat started")
+            elif action == "start_reading":
+                contact = msg.get("contact", "")
+                context = msg.get("context", "")
+                wingman.start_collecting(contact, context)
+            elif action == "stop_reading":
+                asyncio.create_task(wingman.stop_collecting())
             elif action == "regenerate":
                 wingman._pending_regen = msg.get("preset", -1)
                 wingman._regen_extra_context = msg.get("extra_context", "")
@@ -244,6 +264,20 @@ async def ws_endpoint(ws: WebSocket):
                     wingman._bump()
             elif action == "load_contact":
                 wingman.load_contact(msg.get("contact", ""))
+            elif action == "rename_contact":
+                old_name = msg.get("old_name", "")
+                new_name = msg.get("new_name", "")
+                if old_name and new_name and old_name != new_name:
+                    old_msgs = wingman.store.load(old_name)
+                    if old_msgs:
+                        wingman.store.delete(old_name)
+                        wingman.store.save_raw(new_name, old_msgs)
+                        wingman.saved_contacts = wingman.store.list_contacts()
+                        if wingman.current_contact == old_name:
+                            wingman.current_contact = new_name
+                        wingman.transcript_version += 1
+                        wingman._bump()
+                        print(f"[server] Renamed chat: {old_name} -> {new_name}")
             elif action == "delete_contact":
                 contact = msg.get("contact", "")
                 if contact:

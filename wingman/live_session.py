@@ -1,7 +1,8 @@
-"""Gemini Live API voice session — the brain of Wingman.
+"""Gemini Flash Live voice session.
 
-The Live model sees the screen, hears the user, reads the chat,
-and calls analyze_chat with the extracted transcript + style.
+Flash Live sees the screen and hears the user. It handles voice commands
+("read this", "done") and speaks back confirmations. The actual message
+extraction from frames is handled separately by ChatReader.
 """
 
 from __future__ import annotations
@@ -17,67 +18,65 @@ from google.genai import types
 from wingman.config import (
     GEMINI_API_KEY,
     LIVE_MODEL,
-    LIVE_SYSTEM_INSTRUCTION,
     AUDIO_CHANNELS,
     AUDIO_CHUNK,
     AUDIO_SEND_RATE,
 )
 
-ANALYZE_CHAT_DECL = {
-    "name": "analyze_chat",
+VOICE_COMMAND_DECL = {
+    "name": "wingman_command",
     "description": (
-        "Submit the extracted chat conversation for reply generation. "
-        "Called after reading the chat from the screen."
+        "Call this when the user gives a voice command. "
+        "Supported commands: 'start_reading' (user wants to read a chat), "
+        "'done' (user finished scrolling, generate replies now)."
     ),
     "parameters": {
         "type": "object",
         "properties": {
+            "command": {
+                "type": "string",
+                "description": "'start_reading' or 'done'",
+            },
             "contact_name": {
                 "type": "string",
-                "description": "Name of the person/group this chat is with (from the chat header)",
-            },
-            "messages": {
-                "type": "array",
-                "description": "Chat messages in order, each with speaker, text, and optional reply_to",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "speaker": {
-                            "type": "string",
-                            "description": "'me' for sent, 'them' for received",
-                        },
-                        "text": {
-                            "type": "string",
-                            "description": "The message text",
-                        },
-                        "reply_to": {
-                            "type": "string",
-                            "description": "If this message is a reply to another message, the text of the quoted/replied message. Empty if not a reply.",
-                        },
-                    },
-                    "required": ["speaker", "text"],
-                },
-            },
-            "style": {
-                "type": "string",
-                "description": "Reply style: balanced, playful, flirty, warm, direct, funny, confident, short",
+                "description": "Name from the chat header on screen (only needed for start_reading)",
             },
             "context": {
                 "type": "string",
-                "description": "Extra context or instructions from the user about this chat",
+                "description": "Any extra context the user mentioned verbally, e.g. 'she's been cold lately'. Empty if none.",
             },
         },
-        "required": ["messages", "style"],
+        "required": ["command"],
     },
 }
+
+LIVE_INSTRUCTION = (
+    "You are a wingman assistant. You can see the user's screen and hear them.\n\n"
+    "Your ONLY job is to listen for two voice commands:\n\n"
+    "1. START READING: When the user says 'read this', 'grab this', 'do this chat', "
+    "'read this one', 'this chat', etc. — call wingman_command with command='start_reading'. "
+    "Look at the screen to get the contact_name from the chat header. "
+    "Say 'Reading — scroll when ready' BRIEFLY.\n\n"
+    "2. DONE: When the user says 'done', 'that's it', 'go', 'finish', 'ok do it', "
+    "'analyze', 'generate', etc. — call wingman_command with command='done'. "
+    "Say 'Got it' BRIEFLY.\n\n"
+    "If the user gives extra context while scrolling (e.g. 'she's been cold lately', "
+    "'we met at a party'), include it in the 'context' field.\n\n"
+    "RULES:\n"
+    "- Keep ALL spoken responses to 2-4 words max.\n"
+    "- Do NOT try to read or extract chat messages yourself.\n"
+    "- Do NOT give advice or analysis — just acknowledge commands.\n"
+    "- Ignore background noise, clicks, silence.\n"
+    "- Only respond to clear voice commands from the user."
+)
 
 
 class LiveSession:
     def __init__(
         self,
-        on_analyze_chat: Callable[[str, list[dict], str, str], None] | None = None,
+        on_command: Callable[[str, str, str], None] | None = None,
     ):
-        self._on_analyze_chat = on_analyze_chat
+        self._on_command = on_command
         self._client: genai.Client | None = None
         self._out_queue: asyncio.Queue = asyncio.Queue(maxsize=10)
         self._session = None
@@ -97,7 +96,7 @@ class LiveSession:
             self._out_queue.put_nowait(payload)
 
     async def run(self):
-        tools = [{"function_declarations": [ANALYZE_CHAT_DECL]}]
+        tools = [{"function_declarations": [VOICE_COMMAND_DECL]}]
 
         config = types.LiveConnectConfig(
             response_modalities=[types.Modality.AUDIO],
@@ -108,7 +107,7 @@ class LiveSession:
             ),
             output_audio_transcription=types.AudioTranscriptionConfig(),
             system_instruction=types.Content(
-                parts=[types.Part(text=LIVE_SYSTEM_INSTRUCTION)]
+                parts=[types.Part(text=LIVE_INSTRUCTION)]
             ),
             tools=tools,
         )
@@ -148,7 +147,7 @@ class LiveSession:
 
         print("[live] Microphone warming up (3s)...")
         await asyncio.sleep(3)
-        print("[live] Microphone active — speak to Wingman")
+        print("[live] Microphone active — say 'read this' while looking at a chat")
 
         try:
             while self._running:
@@ -191,7 +190,7 @@ class LiveSession:
                 turn = self._session.receive()
                 async for resp in turn:
                     if resp.data:
-                        continue  # discard audio output
+                        continue
                     if resp.tool_call:
                         await self._handle_tool_calls(resp.tool_call)
                         continue
@@ -205,19 +204,18 @@ class LiveSession:
     async def _handle_tool_calls(self, tool_call):
         responses = []
         for fc in tool_call.function_calls:
-            if fc.name == "analyze_chat":
-                contact = fc.args.get("contact_name", "Unknown")
-                messages = fc.args.get("messages", [])
-                style = fc.args.get("style", "balanced")
+            if fc.name == "wingman_command":
+                command = fc.args.get("command", "")
+                contact = fc.args.get("contact_name", "")
                 context = fc.args.get("context", "")
-                print(f"[live] analyze_chat: {contact}, {len(messages)} msgs, style={style}")
+                print(f"[live] command: {command}, contact: {contact}")
                 if context:
-                    print(f"[live] context: {context}")
-                if self._on_analyze_chat:
-                    self._on_analyze_chat(contact, messages, style, context)
+                    print(f"[live]   context: {context}")
+                if self._on_command:
+                    self._on_command(command, contact, context)
                 responses.append(types.FunctionResponse(
                     id=fc.id, name=fc.name,
-                    response={"result": f"Processing {len(messages)} messages"},
+                    response={"result": f"Command '{command}' received."},
                 ))
             else:
                 responses.append(types.FunctionResponse(

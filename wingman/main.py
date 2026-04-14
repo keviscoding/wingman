@@ -1,11 +1,11 @@
 """Wingman orchestrator.
 
-The Live voice model sees the screen, hears the user, reads the chat,
-and sends structured data to Pro for reply generation.
-Conversations are saved per contact and build up over time.
+Flash Live handles voice commands ("read this" / "done") and speaks back.
+ChatReader (Flash-Lite) reads each screen frame during collection for
+reliable message extraction. Pro generates reply options.
 
-In headless mode (server without screen/mic), the screenshot upload
-endpoint drives the same pipeline.
+In headless mode (server without screen/mic), screenshot uploads drive
+the same pipeline.
 """
 
 from __future__ import annotations
@@ -30,7 +30,6 @@ if sys.version_info < (3, 11, 0):
 
 
 class _DummyLive:
-    """Stub for LiveSession when running headless (no mic/screen)."""
     mic_muted = False
     def stop(self): pass
     async def run(self): await asyncio.Event().wait()
@@ -38,12 +37,11 @@ class _DummyLive:
 
 
 class _DummyCapture:
-    """Stub for ScreenCapture when running headless."""
     def stop(self): pass
     async def stream(self):
         await asyncio.Event().wait()
         return
-        yield  # make it an async generator
+        yield
 
 
 class Wingman:
@@ -65,7 +63,7 @@ class Wingman:
             from wingman.capture import CaptureRegion, ScreenCapture
             from wingman.live_session import LiveSession
             self.capture = ScreenCapture(region=capture_region)
-            self.live = LiveSession(on_analyze_chat=self._on_analyze_chat)
+            self.live = LiveSession(on_command=self._on_voice_command)
 
         self.latest_replies: list[dict] = []
         self.latest_read: str = ""
@@ -74,83 +72,154 @@ class Wingman:
         self.current_contact: str = ""
         self.saved_contacts: list[str] = self.store.list_contacts()
         self.status: str = "idle"
+        self.collecting_count: int = 0
         self.status_version: int = 0
         self.transcript_version: int = 0
         self.replies_version: int = 0
 
-        self._pending_analysis: tuple[str, list[dict], str, str] | None = None
         self._pending_regen: int | None = None
         self._regen_extra_context: str = ""
+        self._frame_collecting: bool = False
+        self._collecting_context: str = ""
+        self._pending_done: bool = False
 
     def _bump(self):
         self.status_version += 1
 
-    def _on_analyze_chat(self, contact: str, messages: list[dict], style: str, context: str):
-        print(f"[wingman] Got {len(messages)} msgs from Live model (contact={contact}, style={style})")
-        self._pending_analysis = (contact, messages, style, context)
+    # ── Voice command callback (from Flash Live) ─────────────────────
 
-    async def _process_analysis(self, contact: str, messages: list[dict], style: str, context: str):
-        self.live.mic_muted = True
-        new_contact = contact.strip() or "Unknown"
-        self.status = "processing"
-        self._bump()
+    def _on_voice_command(self, command: str, contact: str, context: str):
+        """Called by LiveSession when it detects a voice command."""
+        if command == "start_reading":
+            self.start_collecting(contact, context)
+        elif command == "done":
+            if context:
+                self._collecting_context = (
+                    (self._collecting_context + " " + context)
+                    if self._collecting_context else context
+                )
+            asyncio.create_task(self.stop_collecting())
+        else:
+            print(f"[wingman] Unknown voice command: {command}")
 
-        # Check if this is the same contact already loaded
+    # ── Start / Stop collection (called from voice or UI buttons) ────
+
+    def start_collecting(self, contact: str, context: str = ""):
+        """Begin frame-by-frame collection. Each new frame is read by ChatReader."""
+        new_contact = contact.strip() or self.current_contact or "Unknown"
+
         same_contact = (
             self.current_contact
-            and new_contact.lower() == self.current_contact.lower()
+            and self.current_contact.lower() == new_contact.lower()
         )
 
         if same_contact:
-            # Same person — just append new messages on top of existing history
-            before = len(self.conversation.messages)
-            added = self.conversation.ingest_parsed_messages(messages)
-            print(f"[wingman] Updated {self.current_contact}: +{added} new "
-                  f"(was {before}, now {len(self.conversation.messages)})")
+            print(f"[wingman] Continue collecting for {self.current_contact} "
+                  f"({len(self.conversation.messages)} existing messages — will append)")
         else:
-            # Different person — load their saved history, then add new
+            print(f"[wingman] Start collecting: {new_contact} (new contact)")
             self.current_contact = new_contact
             self.conversation.messages.clear()
             self.conversation.new_since_last_generation = 0
-
             existing = self.store.load(self.current_contact)
             if existing:
                 self.conversation.ingest_parsed_messages(existing)
-                print(f"[wingman] Loaded {len(self.conversation.messages)} "
-                      f"saved messages for {self.current_contact}")
+                print(f"[wingman]   loaded {len(self.conversation.messages)} saved messages")
 
-            added = self.conversation.ingest_parsed_messages(messages)
-            print(f"[wingman] +{added} new messages "
-                  f"(total {len(self.conversation.messages)})")
+        self._collecting_context = context
+        self._frame_collecting = True
+        self.status = "collecting"
+        self.collecting_count = len(self.conversation.messages)
+        self._bump()
 
-        self.transcript_version += 1
+    async def stop_collecting(self):
+        """Stop frame collection, wait for in-flight reads, then trigger replies."""
+        self._frame_collecting = False
+        if self.reader.is_busy:
+            print("[wingman] Waiting for reader to finish...")
+            while self.reader.is_busy:
+                await asyncio.sleep(0.3)
+        print(f"[wingman] Stop collecting — {len(self.conversation.messages)} total messages")
+        self._pending_done = True
+        self._bump()
 
-        # Save updated history
-        self.store.save(self.current_contact, self.conversation.messages)
-        self.saved_contacts = self.store.list_contacts()
+    # ── Frame loop (screen capture → Live + ChatReader) ──────────────
 
+    async def _frame_loop(self):
+        """Grab screen frames. Always update preview; only read when collecting."""
+        print("[wingman] Screen capture started")
+        import mss, asyncio as _aio
+        from wingman.capture import Frame
+        sct = mss.mss()
+        monitor = self.capture._build_monitor(sct)
+        while True:
+            frame = await asyncio.to_thread(self.capture._grab_frame, sct, monitor)
+            self.latest_frame_b64 = frame.jpeg_b64
+
+            if self._frame_collecting and not self.reader.is_busy:
+                print("[wingman] Sending frame to reader...")
+                asyncio.create_task(self._read_frame(frame.jpeg_bytes))
+
+            await asyncio.sleep(0.5 if self._frame_collecting else 2.0)
+
+    async def _read_frame(self, jpeg_bytes: bytes):
+        """Send a single frame to ChatReader and ingest the results."""
+        try:
+            result = await self.reader.read(jpeg_bytes)
+            if result.messages:
+                added = self.conversation.ingest_parsed_messages(result.messages)
+                if added:
+                    self.transcript_version += 1
+                    self.collecting_count = len(self.conversation.messages)
+                    self.store.save(self.current_contact, self.conversation.messages)
+                    self.saved_contacts = self.store.list_contacts()
+                    print(f"[wingman]   +{added} msgs from frame (total {len(self.conversation.messages)})")
+                    self._bump()
+        except Exception as exc:
+            print(f"[wingman] Frame read error: {exc}")
+
+    # ── Command loop (handles pending generation / regen) ────────────
+
+    async def _command_loop(self):
+        while True:
+            await asyncio.sleep(0.3)
+
+            if self._pending_done:
+                self._pending_done = False
+                self.live.mic_muted = True
+                self.status = "generating"
+                self._bump()
+                print(f"[wingman] Generating replies for {self.current_contact} "
+                      f"({len(self.conversation.messages)} messages)...")
+                await self._generate_replies(context=self._collecting_context)
+                self._collecting_context = ""
+
+            if self._pending_regen is not None:
+                preset_idx = self._pending_regen
+                extra = self._regen_extra_context
+                self._pending_regen = None
+                self._regen_extra_context = ""
+                if self.conversation.messages:
+                    self.live.mic_muted = True
+                    self.status = "generating"
+                    self._bump()
+                    await self._generate_replies(
+                        context=extra, preset_idx=preset_idx,
+                    )
+
+    # ── Reply generation ─────────────────────────────────────────────
+
+    async def _generate_replies(self, context: str = "", preset_idx: int | None = None):
         if not self.conversation.messages:
-            self.live.mic_muted = False
             self.status = "idle"
             self._bump()
             return
 
-        # Generate replies
-        self.generator.style = style
-        self.status = "generating"
-        self._bump()
-        await self._generate_replies(context)
-
-    async def _generate_replies(self, context: str = "", preset_idx: int | None = None):
-        if not self.conversation.messages:
-            return
-
-        # Build goal from active preset (or override)
         idx = preset_idx if preset_idx is not None else self.active_preset
         preset_goal = self.presets.get(idx) if idx >= 0 else ""
         goal = preset_goal or context or ""
 
-        transcript_json = self.conversation.to_json(last_n=50)
+        transcript_json = self.conversation.to_json()
         if goal:
             print(f"[wingman] Generating replies (goal: {goal[:60]})...")
         else:
@@ -179,24 +248,20 @@ class Wingman:
         self.status = "done"
         self._bump()
 
-    async def process_screenshots(
+    # ── Screenshot upload (headless / mobile) ────────────────────────
+
+    async def process_media(
         self,
         contact: str,
-        jpeg_images: list[bytes],
+        media_items: list[tuple[bytes, str]],
         extra_context: str = "",
     ):
-        """Process uploaded screenshots: extract chat via ChatReader, generate replies."""
-        self.live.mic_muted = True
+        """Process uploaded screenshots/videos in a SINGLE batch call."""
         self.status = "processing"
         self._bump()
 
-        new_contact = contact.strip() or "Unknown"
-        same_contact = (
-            self.current_contact
-            and new_contact.lower() == self.current_contact.lower()
-        )
-
-        if not same_contact:
+        new_contact = contact.strip() or self.current_contact or "Unknown"
+        if not self.current_contact or self.current_contact.lower() != new_contact.lower():
             self.current_contact = new_contact
             self.conversation.messages.clear()
             self.conversation.new_since_last_generation = 0
@@ -205,25 +270,17 @@ class Wingman:
                 self.conversation.ingest_parsed_messages(existing)
                 print(f"[wingman] Loaded {len(self.conversation.messages)} saved messages for {self.current_contact}")
 
-        all_messages: list[dict] = []
-        for i, jpeg in enumerate(jpeg_images):
-            print(f"[wingman] Reading screenshot {i+1}/{len(jpeg_images)}...")
-            result = await self.reader.read(jpeg)
-            if result.messages:
-                all_messages.extend(result.messages)
-                print(f"[wingman]   -> {len(result.messages)} messages extracted")
-            else:
-                print(f"[wingman]   -> no chat found in screenshot {i+1}")
+        print(f"[wingman] Processing {len(media_items)} file(s) in single batch...")
+        result = await self.reader.read_batch(media_items)
 
-        if all_messages:
-            added = self.conversation.ingest_parsed_messages(all_messages)
+        if result.messages:
+            added = self.conversation.ingest_parsed_messages(result.messages)
             print(f"[wingman] +{added} new messages (total {len(self.conversation.messages)})")
             self.transcript_version += 1
             self.store.save(self.current_contact, self.conversation.messages)
             self.saved_contacts = self.store.list_contacts()
 
         if not self.conversation.messages:
-            self.live.mic_muted = False
             self.status = "idle"
             self._bump()
             return
@@ -232,8 +289,9 @@ class Wingman:
         self._bump()
         await self._generate_replies(context=extra_context)
 
+    # ── Contact management ───────────────────────────────────────────
+
     def load_contact(self, contact: str):
-        """Switch to a saved contact's chat history."""
         existing = self.store.load(contact)
         self.conversation.messages.clear()
         self.conversation.new_since_last_generation = 0
@@ -247,45 +305,25 @@ class Wingman:
         self._bump()
         print(f"[wingman] Loaded chat with {contact}: {len(self.conversation.messages)} messages")
 
-    async def _frame_loop(self):
-        print("[wingman] Screen capture started")
-        async for frame in self.capture.stream():
-            self.latest_frame_b64 = frame.jpeg_b64
-            await self.live.send_frame(frame.jpeg_bytes)
-
-    async def _command_loop(self):
-        while True:
-            await asyncio.sleep(0.3)
-            if self._pending_analysis:
-                contact, msgs, style, ctx = self._pending_analysis
-                self._pending_analysis = None
-                await self._process_analysis(contact, msgs, style, ctx)
-            if self._pending_regen is not None:
-                preset_idx = self._pending_regen
-                extra = self._regen_extra_context
-                self._pending_regen = None
-                self._regen_extra_context = ""
-                if self.conversation.messages:
-                    self.live.mic_muted = True
-                    self.status = "generating"
-                    self._bump()
-                    await self._generate_replies(
-                        context=extra, preset_idx=preset_idx,
-                    )
+    # ── Live session wrapper with auto-reconnect ─────────────────────
 
     async def _live_wrapper(self):
-        try:
-            await self.live.run()
-        except Exception as exc:
-            print(f"[wingman] Voice error: {exc}")
-            print("[wingman] Voice disabled — use buttons instead")
+        while True:
+            try:
+                await self.live.run()
+            except Exception as exc:
+                print(f"[wingman] Voice error: {exc}")
+                print("[wingman] Reconnecting in 3 seconds...")
+                await asyncio.sleep(3)
+
+    # ── Main run ─────────────────────────────────────────────────────
 
     async def run(self):
         mode = "HEADLESS" if self.headless else "DESKTOP"
         print(f"[wingman] Starting Wingman ({mode})...")
 
         if self.training.load():
-            self.generator.set_cache(self.training.cache_name)
+            self.generator.set_cache(self.training.cache_name, training_cache=self.training)
             print(f"[wingman] Training loaded: {self.training.file_count} files, "
                   f"{self.training.token_count:,} tokens cached")
         else:
@@ -295,7 +333,7 @@ class Wingman:
             print("[wingman] Ready — upload screenshots from the web UI")
             await self._command_loop()
         else:
-            print("[wingman] Just talk: 'Read this chat', 'Do the chat with X', etc.")
+            print("[wingman] Ready — say 'read this' or click Start Reading")
             async with asyncio.TaskGroup() as tg:
                 tg.create_task(self._live_wrapper())
                 tg.create_task(self._frame_loop())

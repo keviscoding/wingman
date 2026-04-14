@@ -9,22 +9,23 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Wingman">
   <meta name="theme-color" content="#0a0a0f">
-  <link rel="stylesheet" href="/static/style.css?v=12">
+  <link rel="stylesheet" href="/static/style.css?v=43">
 </head>
 <body>
   <div id="app">
     <header>
       <h1>WINGMAN</h1>
       <div class="header-right">
-        <button class="mic-btn" id="micBtn" title="Pause/Resume mic">
-          <span id="micIcon">&#127908;</span>
-          <span id="micLabel">Listening</span>
+        <button class="theme-btn" id="themeBtn" title="Toggle light/dark mode">&#9788;</button>
+        <button class="reading-btn" id="readBtn" title="Start reading the chat on screen">
+          <span id="readIcon">&#128065;</span>
+          <span id="readLabel">Start Reading</span>
         </button>
       </div>
     </header>
 
     <div class="status-banner" id="statusBanner">
-      <span id="statusText">Upload screenshots to get started</span>
+      <span id="statusText">Click "Start Reading" then scroll through a chat</span>
     </div>
 
     <!-- Training status -->
@@ -37,88 +38,102 @@
       </label>
     </div>
 
-    <!-- Input section -->
-    <div class="upload-section" id="uploadSection">
+    <!-- Input section (headless / mobile only) -->
+    <div class="upload-section" id="uploadSection" style="display:none">
       <div class="upload-row">
         <input type="text" id="contactInput" class="contact-input"
                placeholder="Contact name (e.g. Evie)" autocomplete="off">
       </div>
-
-      <!-- Screen share (desktop browsers only) -->
-      <div class="screenshare-box hidden" id="screenshareBox">
-        <button class="screenshare-btn" id="screenshareBtn">
-          <span class="upload-icon">&#128241;</span>
-          <span>Share Screen</span>
-        </button>
-        <div class="screenshare-active hidden" id="screenshareActive">
-          <video id="screenshareVideo" autoplay playsinline muted></video>
-          <div class="screenshare-controls">
-            <span id="frameCount" class="frame-count">0 frames</span>
-            <button class="capture-toggle" id="captureToggle">&#9899; Capture</button>
-            <button class="stop-share-btn" id="stopShareBtn">Stop</button>
-          </div>
-        </div>
-        <div class="or-divider"><span>or</span></div>
-      </div>
-
-      <!-- Screenshot upload -->
       <div class="upload-row">
         <label class="screenshot-upload-btn" id="screenshotBtn">
           <span class="upload-icon">&#128247;</span>
           <span>Upload Screenshots</span>
-          <input type="file" id="screenshotInput" multiple accept="image/*" hidden>
+          <input type="file" id="screenshotInput" multiple accept="image/*,video/*" hidden>
         </label>
       </div>
       <div class="upload-preview" id="uploadPreview"></div>
-
       <textarea id="extraContext" class="context-input"
                 placeholder="Extra context... (e.g. 'we met at a party', 'she's been cold lately')"
                 rows="2"></textarea>
       <button class="analyze-btn" id="analyzeBtn" disabled>
-        <span id="analyzeBtnText">Select screenshots or share screen</span>
+        <span id="analyzeBtnText">Select screenshots</span>
       </button>
     </div>
 
+    <!-- Input bar: contact name + context -->
+    <div class="reading-contact-bar" id="readingContactBar">
+      <input type="text" id="readContactInput" class="contact-input"
+             placeholder="Contact name (e.g. Evie)" autocomplete="off">
+      <textarea id="readExtraContext" class="context-input"
+                placeholder="Extra context (optional)"
+                rows="1"></textarea>
+    </div>
+
+    <!-- Drop zone for screenshots -->
+    <div class="drop-zone" id="dropZone">
+      <div class="drop-zone-inner" id="dropZoneInner">
+        <span class="drop-icon">&#128247;</span>
+        <span class="drop-text">Drop screenshots or videos here, or <label class="drop-browse" for="dropFileInput">browse</label></span>
+        <input type="file" id="dropFileInput" multiple accept="image/*,video/*" hidden>
+      </div>
+      <div class="drop-preview" id="dropPreview"></div>
+      <button class="drop-analyze-btn hidden" id="dropAnalyzeBtn">Analyze</button>
+    </div>
+
     <div class="main-layout">
-      <!-- Saved contacts sidebar / horizontal scroll on mobile -->
       <aside class="contacts-sidebar" id="contactsSidebar">
-        <h3>Saved Chats</h3>
+        <div class="sidebar-header">
+          <h3>Saved Chats</h3>
+          <button class="new-chat-btn" id="newChatBtn" title="New chat">+ New</button>
+        </div>
         <div id="contactsList" class="contacts-list">
           <p class="empty-small">No chats yet</p>
         </div>
       </aside>
 
-      <!-- Content area -->
       <div class="content">
-        <!-- Screen preview (desktop only) -->
         <div class="preview-small" id="previewSection">
           <img id="previewImg" src="/frame.jpg" alt="Screen">
         </div>
 
-        <!-- Current contact label -->
         <div class="contact-label" id="contactLabel"></div>
 
-        <!-- Results -->
         <main id="results" class="results hidden">
           <section class="transcript-panel">
-            <h2>Chat <span id="msgCount" class="count"></span></h2>
+            <div class="transcript-header">
+              <h2>Chat <span id="msgCount" class="count"></span></h2>
+              <div class="add-dropdown" id="addDropdown">
+                <button class="append-btn" id="addToggle">+ Add new</button>
+                <div class="add-menu hidden" id="addMenu">
+                  <button class="add-option" id="addReadScreen">&#128065; Read screen</button>
+                  <label class="add-option" id="addScreenshot">
+                    &#128247; Screenshot
+                    <input type="file" id="addScreenshotInput" multiple accept="image/*,video/*" hidden>
+                  </label>
+                </div>
+              </div>
+            </div>
             <div id="transcript" class="transcript-scroll"></div>
+            <div class="add-drop-strip" id="addDropStrip">
+              <span class="add-drop-label">Drop screenshots here to add</span>
+              <input type="file" id="addDropFileInput" multiple accept="image/*,video/*" hidden>
+            </div>
           </section>
           <section class="replies-panel">
-            <!-- Situation read + advice -->
             <div id="coachSection" class="coach-section hidden">
               <div class="coach-read" id="coachRead"></div>
               <div class="coach-advice" id="coachAdvice"></div>
             </div>
-
-            <!-- Goal presets -->
             <div class="presets-bar">
               <select id="presetSelect">
                 <option value="-1">No goal (default)</option>
               </select>
               <button class="preset-add-btn" id="addPresetBtn" title="Save a new goal preset">+ New goal</button>
             </div>
-
+            <div class="extra-request-bar">
+              <input type="text" id="extraRequestInput" class="extra-request-input"
+                     placeholder="Extra request for next replies (optional)..." autocomplete="off">
+            </div>
             <div class="replies-header">
               <h2>Replies</h2>
               <button class="regen-btn" id="regenBtn" title="Generate new replies">&#8635; New replies</button>
@@ -131,6 +146,6 @@
 
     <div id="toast" class="toast">Copied!</div>
   </div>
-  <script src="/static/app.js?v=12"></script>
+  <script src="/static/app.js?v=44"></script>
 </body>
 </html>
