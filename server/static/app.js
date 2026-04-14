@@ -64,7 +64,6 @@
     if (readingContactBar) readingContactBar.style.display = "none";
     if (previewSection) previewSection.style.display = "none";
     if (uploadSection) uploadSection.style.display = "";
-    if (trainingBar) trainingBar.style.display = "none";
     statusText.textContent = "Upload chat screenshots to get started";
   }
 

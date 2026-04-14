@@ -26,9 +26,33 @@ html.headless-mobile #app {
 /* No live screen / desktop capture */
 html.headless-mobile #readBtn,
 html.headless-mobile #readingContactBar,
-html.headless-mobile #previewSection,
-html.headless-mobile #trainingBar {
+html.headless-mobile #previewSection {
   display: none !important;
+}
+
+/* Training transcripts — compact row (upload + status); files live on server only, not in git */
+html.headless-mobile #trainingBar {
+  display: flex !important;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 10px 12px;
+  margin: 6px 0 8px;
+  font-size: 13px;
+  border-radius: 12px;
+}
+html.headless-mobile #trainingLabel {
+  flex: 1 1 140px;
+  min-width: 0;
+  line-height: 1.35;
+}
+html.headless-mobile #trainingBar .upload-btn {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  font-size: 12px;
+  margin-left: 0;
+  border-radius: 10px;
+  touch-action: manipulation;
 }
 
 /* Coach / analysis de-emphasized on mobile */
