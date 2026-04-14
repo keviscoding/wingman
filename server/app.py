@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+from typing import Any
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Body
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -106,7 +107,7 @@ async def index():
     html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
     if HEADLESS:
         html = html.replace("<html lang=\"en\">", "<html lang=\"en\" class=\"headless-mobile\">", 1)
-        inject = '  <link rel="stylesheet" href="/static/mobile.css?v=3">\n'
+        inject = '  <link rel="stylesheet" href="/static/mobile.css?v=4">\n'
         html = html.replace("</head>", inject + "</head>", 1)
     return Response(content=html, media_type="text/html")
 
@@ -122,6 +123,46 @@ async def api_state():
         "read": wingman.latest_read,
         "advice": wingman.latest_advice,
     }
+
+
+@app.get("/api/presets-export")
+async def presets_export():
+    """Download goals for manual transfer (local → phone). Same shape as presets.json."""
+    if not wingman:
+        return {"presets": [], "active_preset": -1}
+    return {"presets": wingman.presets.presets, "active_preset": wingman.active_preset}
+
+
+@app.post("/api/presets-import")
+async def presets_import(body: Any = Body(...)):
+    """Upload goals JSON from Export or a raw presets.json array. Replaces all goals on this server."""
+    if not wingman:
+        return {"error": "Wingman not ready"}
+    if isinstance(body, list):
+        wingman.presets.replace_all(body)
+        wingman.active_preset = -1
+        wingman._bump()
+        return {"ok": True, "count": len(wingman.presets.presets), "active_preset": -1}
+    if not isinstance(body, dict):
+        return {"error": "Invalid JSON"}
+    raw = body.get("presets")
+    if not isinstance(raw, list):
+        return {"error": "Invalid JSON: use Export from the app, or a list of {name, instruction}"}
+    wingman.presets.replace_all(raw)
+    ap = body.get("active_preset", -1)
+    try:
+        ap = int(ap)
+    except (TypeError, ValueError):
+        ap = -1
+    n = len(wingman.presets.presets)
+    if n == 0:
+        wingman.active_preset = -1
+    elif ap < 0 or ap >= n:
+        wingman.active_preset = -1
+    else:
+        wingman.active_preset = ap
+    wingman._bump()
+    return {"ok": True, "count": n, "active_preset": wingman.active_preset}
 
 
 @app.post("/api/upload-training")

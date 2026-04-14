@@ -51,6 +51,9 @@ select {
   transition: all 0.2s;
 }
 .theme-btn:hover { border-color: var(--accent); color: var(--accent); }
+.theme-btn.notify-on {
+  border-color: var(--green); color: var(--green);
+}
 
 .reading-btn {
   display: flex; align-items: center; gap: 6px;
@@ -414,7 +417,7 @@ section h2 {
 }
 
 .presets-bar {
-  display: flex; gap: 8px; align-items: center; margin-bottom: 10px;
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px;
   flex-shrink: 0; padding: 8px; background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius);
 }
@@ -429,6 +432,17 @@ section h2 {
   font-weight: 600; cursor: pointer; white-space: nowrap;
 }
 .preset-add-btn:hover { background: var(--accent); color: #fff; }
+
+.preset-io-btn {
+  padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--dim); font-size: 11px;
+  font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.preset-io-btn:hover { border-color: var(--accent); color: var(--accent); }
+.preset-io-label {
+  display: inline-flex; align-items: center; cursor: pointer;
+  margin: 0;
+}
 
 .extra-request-bar {
   margin-bottom: 8px; flex-shrink: 0;

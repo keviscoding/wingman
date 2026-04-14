@@ -18,6 +18,9 @@
   const regenBtn = document.getElementById("regenBtn");
   const presetSelect = document.getElementById("presetSelect");
   const addPresetBtn = document.getElementById("addPresetBtn");
+  const exportPresetsBtn = document.getElementById("exportPresetsBtn");
+  const importPresetsInput = document.getElementById("importPresetsInput");
+  const notifyBtn = document.getElementById("notifyBtn");
   const toastEl = document.getElementById("toast");
 
   const trainingBar = document.getElementById("trainingBar");
@@ -57,6 +60,8 @@
   let isReading = false;
   let pendingFiles = [];
   let lastSoundState = "idle";
+  /** Dedupes system notifications when the same reply batch is re-polled. */
+  let lastRepliesNotifyFp = "";
 
   if (isMobileHost()) {
     isHeadless = true;
@@ -207,6 +212,63 @@
     const isLight = document.documentElement.getAttribute("data-theme") === "light";
     themeBtn.textContent = isLight ? "\u263E" : "\u2606";
     themeBtn.title = isLight ? "Switch to dark mode" : "Switch to light mode";
+  }
+
+  const notifyIconUrl = () =>
+    (typeof location !== "undefined" ? new URL("/static/icon-192.png", location.origin).href : undefined);
+
+  function updateNotifyBtn() {
+    if (!notifyBtn) return;
+    if (typeof Notification === "undefined") {
+      notifyBtn.hidden = true;
+      return;
+    }
+    notifyBtn.hidden = false;
+    if (Notification.permission === "granted") {
+      notifyBtn.title = "Reply alerts on — tap for a test notification";
+      notifyBtn.classList.add("notify-on");
+    } else if (Notification.permission === "denied") {
+      notifyBtn.title = "Notifications blocked — change in iPhone Settings if needed";
+      notifyBtn.classList.remove("notify-on");
+    } else {
+      notifyBtn.title = "Tap to enable alerts when reply options are ready (works best from Home Screen)";
+      notifyBtn.classList.remove("notify-on");
+    }
+  }
+
+  if (notifyBtn) {
+    notifyBtn.addEventListener("click", async () => {
+      if (typeof Notification === "undefined") return;
+      if (Notification.permission === "granted") {
+        try {
+          new Notification("Wingman", {
+            body: "You will see this when new reply options are ready.",
+            tag: "wingman-test",
+            icon: notifyIconUrl(),
+          });
+        } catch (_) {}
+        return;
+      }
+      if (Notification.permission === "denied") {
+        statusText.textContent = "Notifications are blocked for this site in Settings.";
+        statusBanner.classList.add("active");
+        return;
+      }
+      try {
+        const p = await Notification.requestPermission();
+        updateNotifyBtn();
+        if (p === "granted") {
+          try {
+            new Notification("Wingman", {
+              body: "Alerts enabled — switch away while generating to get notified.",
+              tag: "wingman-test",
+              icon: notifyIconUrl(),
+            });
+          } catch (_) {}
+        }
+      } catch (_) {}
+    });
+    updateNotifyBtn();
   }
 
   // ── Start Reading / Done button ───────────────────────────────────
@@ -650,6 +712,22 @@
     );
   }
 
+  function maybeNotifyRepliesReady(options) {
+    if (!options || !options.length) return;
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    const fp = JSON.stringify(options.map(o => o.text));
+    if (fp === lastRepliesNotifyFp) return;
+    lastRepliesNotifyFp = fp;
+    if (document.visibilityState === "visible" && document.hasFocus()) return;
+    try {
+      new Notification("Wingman", {
+        body: "Reply options are ready — open the app to pick one.",
+        tag: "wingman-replies",
+        icon: notifyIconUrl(),
+      });
+    } catch (_) {}
+  }
+
   function renderReplies(options, read, advice) {
     if (!options || !options.length) return;
     results.classList.remove("hidden");
@@ -671,6 +749,7 @@
     repliesEl.querySelectorAll(".reply-card").forEach(c =>
       c.addEventListener("click", () => copy(c.dataset.text))
     );
+    maybeNotifyRepliesReady(options);
   }
 
   function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
@@ -715,6 +794,52 @@
     if (!instr) return;
     send({ action: "add_preset", name: name, instruction: instr });
   });
+
+  if (exportPresetsBtn) {
+    exportPresetsBtn.addEventListener("click", async () => {
+      try {
+        const r = await fetch("/api/presets-export");
+        const data = await r.json();
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "wingman-goals.json";
+        a.click();
+        URL.revokeObjectURL(a.href);
+      } catch (_) {
+        statusText.textContent = "Could not export goals";
+        statusBanner.classList.add("active");
+      }
+    });
+  }
+
+  if (importPresetsInput) {
+    importPresetsInput.addEventListener("change", async () => {
+      const f = importPresetsInput.files && importPresetsInput.files[0];
+      importPresetsInput.value = "";
+      if (!f) return;
+      try {
+        const text = await f.text();
+        const parsed = JSON.parse(text);
+        const r = await fetch("/api/presets-import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(parsed),
+        });
+        const d = await r.json();
+        if (d.error) {
+          statusText.textContent = d.error;
+          statusBanner.classList.add("active");
+          return;
+        }
+        statusText.textContent = `Imported ${d.count} goal(s)`;
+        statusBanner.classList.add("active");
+      } catch (_) {
+        statusText.textContent = "Import failed — use Export file or presets.json";
+        statusBanner.classList.add("active");
+      }
+    });
+  }
 
   // ── Add new dropdown (read screen or screenshot) ─────────────────
 
@@ -836,6 +961,7 @@
 
   document.getElementById("newChatBtn").addEventListener("click", () => {
     send({ action: "new_chat" });
+    lastRepliesNotifyFp = "";
     if (readContactInput) readContactInput.value = "";
     if (readExtraContext) readExtraContext.value = "";
     if (contactInput) contactInput.value = "";

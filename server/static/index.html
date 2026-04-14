@@ -9,13 +9,15 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Wingman">
   <meta name="theme-color" content="#0a0a0f">
-  <link rel="stylesheet" href="/static/style.css?v=43">
+  <link rel="stylesheet" href="/static/style.css?v=44">
 </head>
 <body>
   <div id="app">
     <header>
       <h1>WINGMAN</h1>
       <div class="header-right">
+        <button type="button" class="theme-btn" id="notifyBtn" title="Tap to enable alerts when replies are ready"
+          aria-label="Reply notifications">&#128276;</button>
         <button class="theme-btn" id="themeBtn" title="Toggle light/dark mode">&#9788;</button>
         <button class="reading-btn" id="readBtn" title="Start reading the chat on screen">
           <span id="readIcon">&#128065;</span>
@@ -128,7 +130,12 @@
               <select id="presetSelect">
                 <option value="-1">No goal (default)</option>
               </select>
-              <button class="preset-add-btn" id="addPresetBtn" title="Save a new goal preset">+ New goal</button>
+              <button type="button" class="preset-add-btn" id="addPresetBtn" title="Save a new goal preset">+ New goal</button>
+              <button type="button" class="preset-io-btn" id="exportPresetsBtn" title="Download your goals as a file (move to phone)">Export</button>
+              <label class="preset-io-btn preset-io-label" title="Load goals file from your computer">
+                Import
+                <input type="file" id="importPresetsInput" accept=".json,application/json" hidden>
+              </label>
             </div>
             <div class="extra-request-bar">
               <input type="text" id="extraRequestInput" class="extra-request-input"
@@ -146,6 +153,6 @@
 
     <div id="toast" class="toast">Copied!</div>
   </div>
-  <script src="/static/app.js?v=45"></script>
+  <script src="/static/app.js?v=47"></script>
 </body>
 </html>
