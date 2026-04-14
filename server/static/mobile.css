@@ -250,25 +250,49 @@ html.headless-mobile .transcript-scroll {
   min-height: 120px;
 }
 
-/* Transcript: hide screen-read flow; rely on drop strip + files */
-html.headless-mobile .transcript-header .add-dropdown {
+/* Hide live screen option only; keep + Add new + screenshot + drop strip */
+html.headless-mobile #addReadScreen {
   display: none !important;
+}
+
+html.headless-mobile .transcript-header {
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 html.headless-mobile .transcript-header h2 {
   font-size: 12px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+html.headless-mobile .transcript-header .append-btn {
+  padding: 10px 14px;
+  font-size: 13px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+html.headless-mobile .add-menu {
+  min-width: 200px;
 }
 
 html.headless-mobile .add-drop-strip {
-  padding: 14px 12px;
-  font-size: 14px;
+  padding: 16px 14px;
+  font-size: 15px;
+  font-weight: 600;
   border-radius: 14px;
-  margin-top: 8px;
-  min-height: 48px;
+  margin-top: 10px;
+  min-height: 56px;
   display: flex;
   align-items: center;
   justify-content: center;
+  text-align: center;
+  line-height: 1.35;
   touch-action: manipulation;
+  border-width: 2px;
+  border-style: dashed;
 }
 
 /* Goals + regen */
