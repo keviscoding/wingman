@@ -64,6 +64,12 @@
   let lastSoundState = "idle";
   /** Dedupes system notifications when the same reply batch is re-polled. */
   let lastRepliesNotifyFp = "";
+  /** True while user is opening or scrolling a native select menu (focus alone is unreliable on iOS). */
+  let contactSelectUiLock = false;
+  let presetSelectUiLock = false;
+  let lastContactsDomSig = null;
+  let lastPresetStateSig = null;
+  let lastPolledRepliesSig = null;
 
   if (isMobileHost()) {
     isHeadless = true;
@@ -569,15 +575,6 @@
     if (msg.type === "replies") renderReplies(msg.options, msg.read, msg.advice);
   }
 
-  setInterval(async () => {
-    try {
-      const d = await (await fetch("/api/state")).json();
-      handleStatus(d);
-      if (d.transcript) renderTranscript(d.transcript);
-      if (d.replies && d.replies.length) renderReplies(d.replies, d.read, d.advice);
-    } catch {}
-  }, 2000);
-
   setInterval(() => {
     if (!isHeadless) previewImg.src = "/frame.jpg?t=" + Date.now();
   }, 2000);
@@ -659,56 +656,66 @@
     }
 
     if (contactSelect) {
-      if (s.contacts && s.contacts.length) {
-        contactSelect.innerHTML =
-          '<option value="">Chats…</option>' +
-          s.contacts.map(c =>
-            `<option value="${escA(c)}"${c === s.contact ? " selected" : ""}>${esc(c)}</option>`
-          ).join("");
-      } else {
-        contactSelect.innerHTML = '<option value="">No saved chats</option>';
+      const contactHtml =
+        s.contacts && s.contacts.length
+          ? '<option value="">Chats…</option>' +
+            s.contacts
+              .map(
+                (c) =>
+                  `<option value="${escA(c)}"${c === s.contact ? " selected" : ""}>${esc(c)}</option>`,
+              )
+              .join("")
+          : '<option value="">No saved chats</option>';
+      const contactBusy =
+        document.activeElement === contactSelect || contactSelectUiLock;
+      if (!contactBusy && contactSelect.innerHTML !== contactHtml) {
+        contactSelect.innerHTML = contactHtml;
       }
     }
 
-    if (s.contacts && s.contacts.length) {
-      contactsList.innerHTML = s.contacts.map(c =>
-        `<div class="contact-item${c === s.contact ? " active" : ""}" data-contact="${esc(c)}">` +
-        `<span class="contact-name">${esc(c)}</span>` +
-        `<span class="contact-actions">` +
-        `<span class="contact-rename" data-rename="${esc(c)}" title="Rename">&#9998;</span>` +
-        `<span class="contact-delete" data-del="${esc(c)}" title="Delete">\u2715</span>` +
-        `</span></div>`
-      ).join("");
-      contactsList.querySelectorAll(".contact-item").forEach(el => {
-        el.addEventListener("click", (e) => {
-          if (e.target.classList.contains("contact-delete") || e.target.classList.contains("contact-rename")) return;
-          const contact = el.dataset.contact;
-          if (readContactInput) readContactInput.value = contact;
-          if (contactInput) contactInput.value = contact;
-          lastTranscriptCount = 0;
-          send({ action: "load_contact", contact });
+    const contactsDomSig = JSON.stringify(s.contacts || []) + "\0" + String(s.contact || "");
+    if (!contactSelectUiLock && contactsDomSig !== lastContactsDomSig) {
+      lastContactsDomSig = contactsDomSig;
+      if (s.contacts && s.contacts.length) {
+        contactsList.innerHTML = s.contacts.map(c =>
+          `<div class="contact-item${c === s.contact ? " active" : ""}" data-contact="${esc(c)}">` +
+          `<span class="contact-name">${esc(c)}</span>` +
+          `<span class="contact-actions">` +
+          `<span class="contact-rename" data-rename="${esc(c)}" title="Rename">&#9998;</span>` +
+          `<span class="contact-delete" data-del="${esc(c)}" title="Delete">\u2715</span>` +
+          `</span></div>`
+        ).join("");
+        contactsList.querySelectorAll(".contact-item").forEach(el => {
+          el.addEventListener("click", (e) => {
+            if (e.target.classList.contains("contact-delete") || e.target.classList.contains("contact-rename")) return;
+            const contact = el.dataset.contact;
+            if (readContactInput) readContactInput.value = contact;
+            if (contactInput) contactInput.value = contact;
+            lastTranscriptCount = 0;
+            send({ action: "load_contact", contact });
+          });
         });
-      });
-      contactsList.querySelectorAll(".contact-rename").forEach(el => {
-        el.addEventListener("click", (e) => {
-          e.stopPropagation();
-          const oldName = el.dataset.rename;
-          const newName = prompt("Rename chat:", oldName);
-          if (newName && newName.trim() && newName.trim() !== oldName) {
-            send({ action: "rename_contact", old_name: oldName, new_name: newName.trim() });
-          }
+        contactsList.querySelectorAll(".contact-rename").forEach(el => {
+          el.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const oldName = el.dataset.rename;
+            const newName = prompt("Rename chat:", oldName);
+            if (newName && newName.trim() && newName.trim() !== oldName) {
+              send({ action: "rename_contact", old_name: oldName, new_name: newName.trim() });
+            }
+          });
         });
-      });
-      contactsList.querySelectorAll(".contact-delete").forEach(el => {
-        el.addEventListener("click", (e) => {
-          e.stopPropagation();
-          if (confirm(`Delete chat with ${el.dataset.del}?`)) {
-            send({ action: "delete_contact", contact: el.dataset.del });
-          }
+        contactsList.querySelectorAll(".contact-delete").forEach(el => {
+          el.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (confirm(`Delete chat with ${el.dataset.del}?`)) {
+              send({ action: "delete_contact", contact: el.dataset.del });
+            }
+          });
         });
-      });
-    } else {
-      contactsList.innerHTML = '<p class="empty-small">No chats yet</p>';
+      } else {
+        contactsList.innerHTML = '<p class="empty-small">No chats yet</p>';
+      }
     }
 
     if (s.messages > 0 || s.has_replies) results.classList.remove("hidden");
@@ -716,12 +723,26 @@
     if (s.presets) {
       lastPresetsList = s.presets;
       const current = presetSelect.value;
-      presetSelect.innerHTML = '<option value="-1">No goal (default)</option>' +
-        s.presets.map((p, i) =>
-          `<option value="${i}"${i === s.active_preset ? " selected" : ""}>${esc(p.name)}</option>`
-        ).join("");
-      if (current !== presetSelect.value) presetSelect.value = s.active_preset;
-      updatePresetSelectTitle();
+      const presetHtml =
+        '<option value="-1">No goal (default)</option>' +
+        s.presets
+          .map(
+            (p, i) =>
+              `<option value="${i}"${i === s.active_preset ? " selected" : ""}>${esc(p.name)}</option>`,
+          )
+          .join("");
+      const presetSig = JSON.stringify(s.presets) + "|" + String(s.active_preset);
+      const presetBusy =
+        document.activeElement === presetSelect || presetSelectUiLock;
+      if (!presetBusy && presetSelect.innerHTML !== presetHtml) {
+        presetSelect.innerHTML = presetHtml;
+        if (current !== presetSelect.value) presetSelect.value = String(s.active_preset);
+        lastPresetStateSig = presetSig;
+        updatePresetSelectTitle();
+      } else if (!presetBusy && presetSig !== lastPresetStateSig) {
+        lastPresetStateSig = presetSig;
+        updatePresetSelectTitle();
+      }
     }
 
     if (s.training_status === "loaded") {
@@ -735,6 +756,23 @@
       trainingLabel.textContent = "Training: " + (s.training_status || "not loaded");
     }
   }
+
+  async function pollStateFromApi() {
+    try {
+      const d = await (await fetch("/api/state")).json();
+      handleStatus(d);
+      if (d.transcript) renderTranscript(d.transcript);
+      if (d.replies && d.replies.length) {
+        const sig = JSON.stringify({ o: d.replies, read: d.read, ad: d.advice });
+        if (sig !== lastPolledRepliesSig) {
+          lastPolledRepliesSig = sig;
+          renderReplies(d.replies, d.read, d.advice);
+        }
+      }
+    } catch {}
+  }
+
+  setInterval(pollStateFromApi, 2000);
 
   // ── Rendering ─────────────────────────────────────────────────────
 
@@ -907,8 +945,22 @@
   });
 
   presetSelect.addEventListener("change", () => {
+    presetSelectUiLock = false;
     send({ action: "set_preset", index: parseInt(presetSelect.value) });
     updatePresetSelectTitle();
+  });
+  presetSelect.addEventListener("focus", () => {
+    presetSelectUiLock = true;
+  });
+  presetSelect.addEventListener("pointerdown", () => {
+    presetSelectUiLock = true;
+  }, true);
+  presetSelect.addEventListener("touchstart", () => {
+    presetSelectUiLock = true;
+  }, { capture: true, passive: true });
+  presetSelect.addEventListener("blur", () => {
+    presetSelectUiLock = false;
+    pollStateFromApi();
   });
 
   addPresetBtn.addEventListener("click", () => {
@@ -1108,12 +1160,26 @@
 
   if (contactSelect) {
     contactSelect.addEventListener("change", () => {
+      contactSelectUiLock = false;
       const v = contactSelect.value;
       if (!v) return;
       if (readContactInput) readContactInput.value = v;
       if (contactInput) contactInput.value = v;
       lastTranscriptCount = 0;
       send({ action: "load_contact", contact: v });
+    });
+    contactSelect.addEventListener("focus", () => {
+      contactSelectUiLock = true;
+    });
+    contactSelect.addEventListener("pointerdown", () => {
+      contactSelectUiLock = true;
+    }, true);
+    contactSelect.addEventListener("touchstart", () => {
+      contactSelectUiLock = true;
+    }, { capture: true, passive: true });
+    contactSelect.addEventListener("blur", () => {
+      contactSelectUiLock = false;
+      pollStateFromApi();
     });
   }
 
@@ -1131,6 +1197,7 @@
   document.getElementById("newChatBtn").addEventListener("click", () => {
     send({ action: "new_chat" });
     lastRepliesNotifyFp = "";
+    lastPolledRepliesSig = null;
     if (readContactInput) readContactInput.value = "";
     if (readExtraContext) readExtraContext.value = "";
     if (contactInput) contactInput.value = "";
