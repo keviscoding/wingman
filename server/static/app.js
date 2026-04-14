@@ -871,6 +871,15 @@
     send({ action: "add_preset", name: name, instruction: instr });
   });
 
+  /** API calls only work when the page is served over http(s), e.g. http://localhost:8000 — not file:// */
+  function apiUrl(path) {
+    if (typeof location === "undefined") return null;
+    const p = location.protocol;
+    if (p !== "http:" && p !== "https:") return null;
+    const rel = path.startsWith("/") ? path : "/" + path;
+    return location.origin + rel;
+  }
+
   async function readJsonError(r) {
     try {
       const j = await r.json();
@@ -885,9 +894,21 @@
   if (exportPresetsBtn) {
     exportPresetsBtn.addEventListener("click", async () => {
       try {
-        const r = await fetch(new URL("/api/export/bundle", location.origin));
+        const url = apiUrl("/api/export/bundle");
+        if (!url) {
+          statusText.textContent =
+            "Run the server (python -m server.app), then open http://127.0.0.1:8000 — don't open index.html from Finder.";
+          statusBanner.classList.add("active");
+          return;
+        }
+        const r = await fetch(url);
         if (!r.ok) {
-          statusText.textContent = await readJsonError(r);
+          if (r.status === 404) {
+            statusText.textContent =
+              "Export not found (404). Restart the server from the project folder: python -m server.app — then hard-refresh this page.";
+          } else {
+            statusText.textContent = await readJsonError(r);
+          }
           statusBanner.classList.add("active");
           return;
         }
@@ -901,7 +922,7 @@
         statusText.textContent = "Saved wingman-bundle.json — goals, training files, and chats";
         statusBanner.classList.add("active");
       } catch (_) {
-        statusText.textContent = "Could not export — check connection and redeploy the app";
+        statusText.textContent = "Could not export — use http://127.0.0.1:8000 and a running server";
         statusBanner.classList.add("active");
       }
     });
@@ -913,9 +934,16 @@
       importPresetsInput.value = "";
       if (!f) return;
       try {
+        const url = apiUrl("/api/import/bundle");
+        if (!url) {
+          statusText.textContent =
+            "Open the app at http://127.0.0.1:8000 (server running) — not from a saved HTML file.";
+          statusBanner.classList.add("active");
+          return;
+        }
         const text = await f.text();
         const parsed = JSON.parse(text);
-        const r = await fetch(new URL("/api/import/bundle", location.origin), {
+        const r = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(parsed),

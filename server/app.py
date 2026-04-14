@@ -84,6 +84,10 @@ async def lifespan(app: FastAPI):
         from wingman.capture import CaptureRegion
         wingman = Wingman(capture_region=CaptureRegion())
     tasks = [asyncio.create_task(wingman.run()), asyncio.create_task(_poll_loop())]
+    print(
+        f"[server] Open http://127.0.0.1:{SERVER_PORT}/ in your browser "
+        f"(not a file:// page). Export: GET /api/export/bundle"
+    )
     yield
     wingman.capture.stop()
     wingman.live.stop()
