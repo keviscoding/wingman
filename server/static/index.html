@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Wingman">
   <meta name="theme-color" content="#0a0a0f">
-  <link rel="stylesheet" href="/static/style.css?v=45">
+  <link rel="stylesheet" href="/static/style.css?v=46">
 </head>
 <body>
   <div id="app">
@@ -88,6 +88,11 @@
           <h3>Saved Chats</h3>
           <button class="new-chat-btn" id="newChatBtn" title="New chat">+ New</button>
         </div>
+        <div class="contact-select-wrap">
+          <select id="contactSelect" aria-label="Saved chats">
+            <option value="">Chats…</option>
+          </select>
+        </div>
         <div id="contactsList" class="contacts-list">
           <p class="empty-small">No chats yet</p>
         </div>
@@ -116,12 +121,9 @@
               </div>
             </div>
             <div id="transcript" class="transcript-scroll"></div>
-            <div class="add-drop-strip" id="addDropStrip">
-              <span class="add-drop-label">Drop screenshots here to add</span>
-              <input type="file" id="addDropFileInput" multiple accept="image/*,video/*" hidden>
-            </div>
           </section>
           <section class="replies-panel">
+            <button type="button" class="analysis-toggle-btn" id="analysisToggleBtn">Show analysis</button>
             <div id="coachSection" class="coach-section hidden">
               <div class="coach-read" id="coachRead"></div>
               <div class="coach-advice" id="coachAdvice"></div>
@@ -156,6 +158,6 @@
 
     <div id="toast" class="toast">Copied!</div>
   </div>
-  <script src="/static/app.js?v=54"></script>
+  <script src="/static/app.js?v=55"></script>
 </body>
 </html>

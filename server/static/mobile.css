@@ -56,10 +56,7 @@ html.headless-mobile #trainingBar .upload-btn {
   touch-action: manipulation;
 }
 
-/* Coach / analysis de-emphasized on mobile */
-html.headless-mobile #coachSection {
-  display: none !important;
-}
+/* Coach / analysis: collapsed by default; use #analysisToggleBtn to expand (see app.js) */
 
 /* Header: room for theme only */
 html.headless-mobile header {
@@ -170,15 +167,12 @@ html.headless-mobile .main-layout {
 
 html.headless-mobile .contacts-sidebar {
   width: 100%;
-  flex-direction: row;
-  flex-wrap: nowrap;
-  align-items: center;
-  overflow-x: auto;
-  overflow-y: hidden;
-  -webkit-overflow-scrolling: touch;
-  padding-bottom: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  overflow: visible;
+  padding-bottom: 10px;
   border-bottom: 1px solid var(--border);
-  gap: 8px;
+  gap: 10px;
   flex-shrink: 0;
 }
 
@@ -186,6 +180,10 @@ html.headless-mobile .sidebar-header {
   flex-shrink: 0;
   margin-bottom: 0;
   gap: 8px;
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 html.headless-mobile .contacts-sidebar h3 {
@@ -199,19 +197,27 @@ html.headless-mobile .new-chat-btn {
   border-radius: 10px;
 }
 
-html.headless-mobile .contacts-list {
-  flex-direction: row;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  gap: 6px;
-  padding: 2px 0;
+html.headless-mobile .contact-select-wrap {
+  display: block;
+  width: 100%;
 }
 
-html.headless-mobile .contact-item {
-  flex-shrink: 0;
-  padding: 8px 14px;
-  font-size: 14px;
-  border-radius: 999px;
+html.headless-mobile .contact-select-wrap select {
+  width: 100%;
+  font-size: 15px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html.headless-mobile .contacts-list {
+  display: none !important;
 }
 
 html.headless-mobile .content {
@@ -255,7 +261,7 @@ html.headless-mobile .transcript-scroll {
   min-height: 120px;
 }
 
-/* No + Add new on mobile — add more context by dragging onto the strip below Chat */
+/* No + Add new on mobile — add more context via the drop zone at the top */
 html.headless-mobile .transcript-header .add-dropdown {
   display: none !important;
 }
@@ -264,21 +270,8 @@ html.headless-mobile .transcript-header h2 {
   font-size: 12px;
 }
 
-html.headless-mobile .add-drop-strip {
-  padding: 16px 14px;
-  font-size: 15px;
-  font-weight: 600;
-  border-radius: 14px;
-  margin-top: 10px;
-  min-height: 56px;
+html.headless-mobile .analysis-toggle-btn.visible {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  line-height: 1.35;
-  touch-action: manipulation;
-  border-width: 2px;
-  border-style: dashed;
 }
 
 /* Goals + regen */

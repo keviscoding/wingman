@@ -11,6 +11,8 @@
   const previewSection = document.getElementById("previewSection");
   const contactLabel = document.getElementById("contactLabel");
   const contactsList = document.getElementById("contactsList");
+  const contactSelect = document.getElementById("contactSelect");
+  const analysisToggleBtn = document.getElementById("analysisToggleBtn");
   const results = document.getElementById("results");
   const transcriptEl = document.getElementById("transcript");
   const repliesEl = document.getElementById("replies");
@@ -656,6 +658,18 @@
       contactLabel.title = "";
     }
 
+    if (contactSelect) {
+      if (s.contacts && s.contacts.length) {
+        contactSelect.innerHTML =
+          '<option value="">Chats…</option>' +
+          s.contacts.map(c =>
+            `<option value="${escA(c)}"${c === s.contact ? " selected" : ""}>${esc(c)}</option>`
+          ).join("");
+      } else {
+        contactSelect.innerHTML = '<option value="">No saved chats</option>';
+      }
+    }
+
     if (s.contacts && s.contacts.length) {
       contactsList.innerHTML = s.contacts.map(c =>
         `<div class="contact-item${c === s.contact ? " active" : ""}" data-contact="${esc(c)}">` +
@@ -831,10 +845,21 @@
     if (!options || !options.length) return;
     results.classList.remove("hidden");
 
-    if ((read || advice) && !isMobileHost()) {
+    if (read || advice) {
       coachRead.textContent = read || "";
       coachAdvice.textContent = advice ? "\u2192 " + advice : "";
-      coachSection.classList.remove("hidden");
+      if (isMobileHost()) {
+        coachSection.classList.add("hidden");
+        if (analysisToggleBtn) {
+          analysisToggleBtn.classList.add("visible");
+          analysisToggleBtn.textContent = "Show analysis";
+        }
+      } else {
+        coachSection.classList.remove("hidden");
+        if (analysisToggleBtn) analysisToggleBtn.classList.remove("visible");
+      }
+    } else if (analysisToggleBtn) {
+      analysisToggleBtn.classList.remove("visible");
     }
 
     repliesEl.innerHTML = options.map(o => {
@@ -1081,63 +1106,24 @@
     addToggle.textContent = "+ Add new";
   });
 
-  // ── Drag-and-drop strip below transcript ─────────────────────────
-
-  const addDropStrip = document.getElementById("addDropStrip");
-  const addDropFileInput = document.getElementById("addDropFileInput");
-
-  addDropStrip.addEventListener("click", () => addDropFileInput.click());
-
-  ["dragenter", "dragover"].forEach(evt => {
-    addDropStrip.addEventListener(evt, (e) => {
-      e.preventDefault();
-      addDropStrip.classList.add("dragover");
+  if (contactSelect) {
+    contactSelect.addEventListener("change", () => {
+      const v = contactSelect.value;
+      if (!v) return;
+      if (readContactInput) readContactInput.value = v;
+      if (contactInput) contactInput.value = v;
+      lastTranscriptCount = 0;
+      send({ action: "load_contact", contact: v });
     });
-  });
-  ["dragleave", "drop"].forEach(evt => {
-    addDropStrip.addEventListener(evt, () => addDropStrip.classList.remove("dragover"));
-  });
-
-  addDropStrip.addEventListener("drop", (e) => {
-    e.preventDefault();
-    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith("image/") || f.type.startsWith("video/"));
-    if (files.length) uploadAddFiles(files);
-  });
-
-  addDropFileInput.addEventListener("change", () => {
-    const files = Array.from(addDropFileInput.files);
-    addDropFileInput.value = "";
-    if (files.length) uploadAddFiles(files);
-  });
-
-  async function uploadAddFiles(files) {
-    addDropStrip.classList.add("uploading");
-    addDropStrip.querySelector(".add-drop-label").textContent = `Reading ${files.length} file${files.length > 1 ? "s" : ""}...`;
-
-    const fd = new FormData();
-    files.forEach(f => fd.append("files", f));
-    fd.append("contact", contactForUpload());
-    fd.append("extra_context", extraForUpload());
-
-    try {
-      const r = await fetch("/api/upload-screenshots", { method: "POST", body: fd });
-      const d = await r.json();
-      if (d.error) {
-        addDropStrip.querySelector(".add-drop-label").textContent = d.error;
-        setTimeout(() => resetDropStrip(), 2000);
-      } else {
-        addDropStrip.querySelector(".add-drop-label").textContent = "Processing...";
-      }
-    } catch (e) {
-      addDropStrip.querySelector(".add-drop-label").textContent = "Upload failed";
-      setTimeout(() => resetDropStrip(), 2000);
-    }
-    addDropStrip.classList.remove("uploading");
-    resetDropStrip();
   }
 
-  function resetDropStrip() {
-    addDropStrip.querySelector(".add-drop-label").textContent = "Drop screenshots here to add";
+  if (analysisToggleBtn) {
+    analysisToggleBtn.addEventListener("click", () => {
+      coachSection.classList.toggle("hidden");
+      analysisToggleBtn.textContent = coachSection.classList.contains("hidden")
+        ? "Show analysis"
+        : "Hide analysis";
+    });
   }
 
   // ── New Chat button ──────────────────────────────────────────────
@@ -1155,7 +1141,12 @@
     msgCountEl.textContent = "";
     contactLabel.textContent = "";
     contactLabel.title = "";
+    if (contactSelect) contactSelect.value = "";
     coachSection.classList.add("hidden");
+    if (analysisToggleBtn) {
+      analysisToggleBtn.classList.remove("visible");
+      analysisToggleBtn.textContent = "Show analysis";
+    }
     results.classList.add("hidden");
   });
 
