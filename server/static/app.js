@@ -928,6 +928,15 @@
     });
   }
 
+  function parseImportFileJson(rawText) {
+    const t = rawText.replace(/^\uFEFF/, "").trim();
+    let v = JSON.parse(t);
+    if (typeof v === "string") {
+      v = JSON.parse(v);
+    }
+    return v;
+  }
+
   if (importPresetsInput) {
     importPresetsInput.addEventListener("change", async () => {
       const f = importPresetsInput.files && importPresetsInput.files[0];
@@ -942,7 +951,17 @@
           return;
         }
         const text = await f.text();
-        const parsed = JSON.parse(text);
+        let parsed;
+        try {
+          parsed = parseImportFileJson(text);
+        } catch (e) {
+          statusText.textContent =
+            e instanceof SyntaxError
+              ? "File is not valid JSON — use Export in Wingman, or open the file and check it starts with { or ["
+              : "Could not parse import file";
+          statusBanner.classList.add("active");
+          return;
+        }
         const r = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },

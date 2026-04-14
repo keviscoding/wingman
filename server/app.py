@@ -264,22 +264,47 @@ def _apply_full_bundle(body: dict) -> dict:
     }
 
 
+def _unwrap_json_body(body: Any) -> Any:
+    """If the client double-encoded JSON (body is a string), parse once more."""
+    if isinstance(body, str) and body.strip():
+        try:
+            return json.loads(body)
+        except json.JSONDecodeError:
+            return body
+    return body
+
+
 def apply_import_payload(body: Any) -> dict:
     """Import goals-only export, raw presets array, or full wingman bundle."""
     if not wingman:
         return {"error": "Wingman not ready"}
+    if body is None:
+        return {"error": "Empty file — pick wingman-bundle.json from Export"}
+
+    body = _unwrap_json_body(body)
+
     if isinstance(body, list):
         wingman.presets.replace_all(body)
         wingman.active_preset = -1
         wingman._bump()
         return {"ok": True, "count": len(wingman.presets.presets), "active_preset": -1}
     if not isinstance(body, dict):
-        return {"error": "Invalid JSON"}
+        return {
+            "error": "Expected a JSON object or array — open the file in a text editor and confirm it starts with { or [",
+        }
+
+    if body.get("detail") and "presets" not in body:
+        return {
+            "error": "This file looks like a server error (e.g. Not Found), not an export. Run Export again from http://127.0.0.1:8000",
+        }
+
     if _is_full_bundle(body):
         return _apply_full_bundle(body)
     raw = body.get("presets")
     if not isinstance(raw, list):
-        return {"error": "Invalid JSON: use Export, or a list of {name, instruction}"}
+        return {
+            "error": "Missing \"presets\" array — use Export to download wingman-bundle.json, or a goals file with { \"presets\": [...], \"active_preset\": n }",
+        }
     wingman.presets.replace_all(raw)
     ap = body.get("active_preset", -1)
     try:
