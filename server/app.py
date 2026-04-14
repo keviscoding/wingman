@@ -125,17 +125,134 @@ async def api_state():
     }
 
 
-@app.get("/api/presets-export")
-async def presets_export():
-    """Download goals for manual transfer (local → phone). Same shape as presets.json."""
+TRAINING_EXPORT_EXTS = frozenset({".txt", ".md", ".text", ".csv", ".json", ".srt", ".vtt"})
+
+
+def _collect_training_files_export() -> list[dict]:
+    from wingman.training import TRAINING_DIR
+
+    TRAINING_DIR.mkdir(parents=True, exist_ok=True)
+    out: list[dict] = []
+    for fp in sorted(TRAINING_DIR.iterdir()):
+        if fp.is_file() and fp.suffix.lower() in TRAINING_EXPORT_EXTS:
+            try:
+                out.append({"name": fp.name, "content": fp.read_text(encoding="utf-8", errors="replace")})
+            except Exception as exc:
+                print(f"[export] skip {fp}: {exc}")
+    return out
+
+
+def _collect_chats_export() -> list[dict]:
+    from wingman.chat_store import STORE_DIR
+
+    STORE_DIR.mkdir(parents=True, exist_ok=True)
+    out: list[dict] = []
+    for fp in sorted(STORE_DIR.glob("*.json")):
+        try:
+            data = json.loads(fp.read_text(encoding="utf-8"))
+            out.append({"contact": data.get("contact", fp.stem), "messages": data.get("messages", [])})
+        except Exception as exc:
+            print(f"[export] skip chat {fp}: {exc}")
+    return out
+
+
+def _export_presets_only() -> dict:
     if not wingman:
         return {"presets": [], "active_preset": -1}
     return {"presets": wingman.presets.presets, "active_preset": wingman.active_preset}
 
 
-@app.post("/api/presets-import")
-async def presets_import(body: Any = Body(...)):
-    """Upload goals JSON from Export or a raw presets.json array. Replaces all goals on this server."""
+def _is_full_bundle(body: dict) -> bool:
+    if body.get("wingman_bundle_version") == 1:
+        return True
+    if "training_files" in body or "chats" in body:
+        return True
+    return False
+
+
+def _clear_training_for_import() -> None:
+    from wingman.training import TRAINING_DIR
+
+    TRAINING_DIR.mkdir(parents=True, exist_ok=True)
+    for fp in TRAINING_DIR.iterdir():
+        if fp.is_file() and fp.suffix.lower() in TRAINING_EXPORT_EXTS:
+            try:
+                fp.unlink()
+            except Exception:
+                pass
+
+
+def _clear_chats_for_import() -> None:
+    from wingman.chat_store import STORE_DIR
+
+    STORE_DIR.mkdir(parents=True, exist_ok=True)
+    for fp in STORE_DIR.glob("*.json"):
+        try:
+            fp.unlink()
+        except Exception:
+            pass
+
+
+def _apply_full_bundle(body: dict) -> dict:
+    w = wingman
+    assert w is not None
+    _clear_training_for_import()
+    _clear_chats_for_import()
+    presets = body.get("presets", [])
+    if isinstance(presets, list):
+        w.presets.replace_all(presets)
+    ap = body.get("active_preset", -1)
+    try:
+        ap = int(ap)
+    except (TypeError, ValueError):
+        ap = -1
+    n = len(w.presets.presets)
+    if n == 0:
+        w.active_preset = -1
+    elif ap < 0 or ap >= n:
+        w.active_preset = -1
+    else:
+        w.active_preset = ap
+
+    from wingman.training import TRAINING_DIR
+
+    TRAINING_DIR.mkdir(parents=True, exist_ok=True)
+    for item in body.get("training_files") or []:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not name or not isinstance(name, str):
+            continue
+        safe = Path(str(name)).name
+        if not safe or safe.startswith("."):
+            continue
+        content = item.get("content", "")
+        (TRAINING_DIR / safe).write_text(str(content), encoding="utf-8")
+
+    if w.training.load():
+        w.generator.set_cache(w.training.cache_name, training_cache=w.training)
+
+    for ch in body.get("chats") or []:
+        if not isinstance(ch, dict):
+            continue
+        contact = str(ch.get("contact", "imported")).strip() or "imported"
+        messages = ch.get("messages", [])
+        if not isinstance(messages, list):
+            messages = []
+        w.store.save_raw(contact, messages)
+    w.saved_contacts = w.store.list_contacts()
+    w._bump()
+    return {
+        "ok": True,
+        "presets_count": n,
+        "training_files": len(body.get("training_files") or []),
+        "chats_count": len(body.get("chats") or []),
+        "active_preset": w.active_preset,
+    }
+
+
+def apply_import_payload(body: Any) -> dict:
+    """Import goals-only export, raw presets array, or full wingman bundle."""
     if not wingman:
         return {"error": "Wingman not ready"}
     if isinstance(body, list):
@@ -145,9 +262,11 @@ async def presets_import(body: Any = Body(...)):
         return {"ok": True, "count": len(wingman.presets.presets), "active_preset": -1}
     if not isinstance(body, dict):
         return {"error": "Invalid JSON"}
+    if _is_full_bundle(body):
+        return _apply_full_bundle(body)
     raw = body.get("presets")
     if not isinstance(raw, list):
-        return {"error": "Invalid JSON: use Export from the app, or a list of {name, instruction}"}
+        return {"error": "Invalid JSON: use Export, or a list of {name, instruction}"}
     wingman.presets.replace_all(raw)
     ap = body.get("active_preset", -1)
     try:
@@ -163,6 +282,45 @@ async def presets_import(body: Any = Body(...)):
         wingman.active_preset = ap
     wingman._bump()
     return {"ok": True, "count": n, "active_preset": wingman.active_preset}
+
+
+@app.get("/api/export/bundle")
+async def api_export_bundle():
+    """Full backup: goals, training transcript files, and saved chats (JSON)."""
+    if not wingman:
+        return {
+            "wingman_bundle_version": 1,
+            "presets": [],
+            "active_preset": -1,
+            "training_files": [],
+            "chats": [],
+        }
+    return {
+        "wingman_bundle_version": 1,
+        "presets": wingman.presets.presets,
+        "active_preset": wingman.active_preset,
+        "training_files": _collect_training_files_export(),
+        "chats": _collect_chats_export(),
+    }
+
+
+@app.get("/api/export/presets")
+async def api_export_presets():
+    """Goals only (smaller file)."""
+    return _export_presets_only()
+
+
+@app.get("/api/presets-export")
+async def api_export_presets_legacy_path():
+    """Legacy path — same as /api/export/presets (some proxies mis-handle hyphenated paths)."""
+    return _export_presets_only()
+
+
+@app.post("/api/import/bundle")
+@app.post("/api/presets-import")
+async def api_import_any(body: Any = Body(...)):
+    """Import full bundle, goals-only export, or raw presets array."""
+    return apply_import_payload(body)
 
 
 @app.post("/api/upload-training")

@@ -795,19 +795,37 @@
     send({ action: "add_preset", name: name, instruction: instr });
   });
 
+  async function readJsonError(r) {
+    try {
+      const j = await r.json();
+      if (j && j.detail) {
+        return typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+      }
+      if (j && j.error) return j.error;
+    } catch (_) {}
+    return `Request failed (${r.status})`;
+  }
+
   if (exportPresetsBtn) {
     exportPresetsBtn.addEventListener("click", async () => {
       try {
-        const r = await fetch("/api/presets-export");
+        const r = await fetch(new URL("/api/export/bundle", location.origin));
+        if (!r.ok) {
+          statusText.textContent = await readJsonError(r);
+          statusBanner.classList.add("active");
+          return;
+        }
         const data = await r.json();
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
-        a.download = "wingman-goals.json";
+        a.download = "wingman-bundle.json";
         a.click();
         URL.revokeObjectURL(a.href);
+        statusText.textContent = "Saved wingman-bundle.json — goals, training files, and chats";
+        statusBanner.classList.add("active");
       } catch (_) {
-        statusText.textContent = "Could not export goals";
+        statusText.textContent = "Could not export — check connection and redeploy the app";
         statusBanner.classList.add("active");
       }
     });
@@ -821,21 +839,39 @@
       try {
         const text = await f.text();
         const parsed = JSON.parse(text);
-        const r = await fetch("/api/presets-import", {
+        const r = await fetch(new URL("/api/import/bundle", location.origin), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(parsed),
         });
-        const d = await r.json();
+        let d = {};
+        try {
+          d = await r.json();
+        } catch (_) {}
+        if (!r.ok) {
+          const msg = d.detail
+            ? (typeof d.detail === "string" ? d.detail : "Server error")
+            : (d.error || `Import failed (${r.status})`);
+          statusText.textContent = msg;
+          statusBanner.classList.add("active");
+          return;
+        }
         if (d.error) {
           statusText.textContent = d.error;
           statusBanner.classList.add("active");
           return;
         }
-        statusText.textContent = `Imported ${d.count} goal(s)`;
-        statusBanner.classList.add("active");
+        if (d.ok) {
+          const parts = [];
+          if (d.presets_count != null) parts.push(`${d.presets_count} goals`);
+          else if (d.count != null) parts.push(`${d.count} goals`);
+          if (d.training_files != null) parts.push(`${d.training_files} training`);
+          if (d.chats_count != null) parts.push(`${d.chats_count} chats`);
+          statusText.textContent = parts.length ? `Imported: ${parts.join(", ")}` : "Import OK";
+          statusBanner.classList.add("active");
+        }
       } catch (_) {
-        statusText.textContent = "Import failed — use Export file or presets.json";
+        statusText.textContent = "Import failed — use wingman-bundle.json or goals-only JSON";
         statusBanner.classList.add("active");
       }
     });

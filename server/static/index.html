@@ -131,8 +131,9 @@
                 <option value="-1">No goal (default)</option>
               </select>
               <button type="button" class="preset-add-btn" id="addPresetBtn" title="Save a new goal preset">+ New goal</button>
-              <button type="button" class="preset-io-btn" id="exportPresetsBtn" title="Download your goals as a file (move to phone)">Export</button>
-              <label class="preset-io-btn preset-io-label" title="Load goals file from your computer">
+              <button type="button" class="preset-io-btn" id="exportPresetsBtn"
+                title="Download wingman-bundle.json: goals, training transcripts, and saved chats">Export</button>
+              <label class="preset-io-btn preset-io-label" title="Restore from wingman-bundle.json (or goals-only JSON)">
                 Import
                 <input type="file" id="importPresetsInput" accept=".json,application/json" hidden>
               </label>
@@ -153,6 +154,6 @@
 
     <div id="toast" class="toast">Copied!</div>
   </div>
-  <script src="/static/app.js?v=47"></script>
+  <script src="/static/app.js?v=48"></script>
 </body>
 </html>
