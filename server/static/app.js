@@ -1113,7 +1113,7 @@
   }
 
   function resetDropStrip() {
-    addDropStrip.querySelector(".add-drop-label").textContent = "Tap or drop more screenshots to add context";
+    addDropStrip.querySelector(".add-drop-label").textContent = "Drop screenshots here to add";
   }
 
   // ── New Chat button ──────────────────────────────────────────────

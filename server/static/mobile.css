@@ -250,32 +250,13 @@ html.headless-mobile .transcript-scroll {
   min-height: 120px;
 }
 
-/* Hide live screen option only; keep + Add new + screenshot + drop strip */
-html.headless-mobile #addReadScreen {
+/* No + Add new on mobile — add more context by dragging onto the strip below Chat */
+html.headless-mobile .transcript-header .add-dropdown {
   display: none !important;
-}
-
-html.headless-mobile .transcript-header {
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
 }
 
 html.headless-mobile .transcript-header h2 {
   font-size: 12px;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-html.headless-mobile .transcript-header .append-btn {
-  padding: 10px 14px;
-  font-size: 13px;
-  border-radius: 10px;
-  flex-shrink: 0;
-}
-
-html.headless-mobile .add-menu {
-  min-width: 200px;
 }
 
 html.headless-mobile .add-drop-strip {
