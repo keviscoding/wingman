@@ -9,7 +9,7 @@ from typing import Any
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Body
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Body
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -99,6 +99,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def allow_web_notifications(request: Request, call_next):
+    """Ensure Notifications API is not blocked by a missing Permissions-Policy (some hosts default-deny)."""
+    response = await call_next(request)
+    if not any(k.lower() == "permissions-policy" for k in response.headers.keys()):
+        response.headers["Permissions-Policy"] = "notifications=(self)"
+    return response
 
 
 @app.get("/")

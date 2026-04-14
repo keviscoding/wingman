@@ -217,10 +217,53 @@
   const notifyIconUrl = () =>
     (typeof location !== "undefined" ? new URL("/static/icon-192.png", location.origin).href : undefined);
 
+  /** WebKit (Safari / iOS) often only supports the callback form; Promise-only can resolve without a prompt. */
+  function requestNotificationPermissionCompat() {
+    return new Promise((resolve) => {
+      if (typeof Notification === "undefined") {
+        resolve("unsupported");
+        return;
+      }
+      const cur = Notification.permission;
+      if (cur === "granted" || cur === "denied") {
+        resolve(cur);
+        return;
+      }
+      let settled = false;
+      const finish = (r) => {
+        if (settled) return;
+        settled = true;
+        resolve(r === "granted" || r === "denied" || r === "default" ? r : Notification.permission);
+      };
+      try {
+        const ret = Notification.requestPermission((result) => finish(result));
+        if (ret !== undefined && ret !== null && typeof ret.then === "function") {
+          ret.then((result) => finish(result)).catch(() => finish(Notification.permission));
+        }
+      } catch (e) {
+        finish("denied");
+      }
+    });
+  }
+
+  function isStandalonePwa() {
+    try {
+      return (
+        window.matchMedia("(display-mode: standalone)").matches ||
+        window.matchMedia("(display-mode: fullscreen)").matches ||
+        (typeof navigator !== "undefined" && navigator.standalone === true)
+      );
+    } catch (_) {
+      return false;
+    }
+  }
+
   function updateNotifyBtn() {
     if (!notifyBtn) return;
     if (typeof Notification === "undefined") {
-      notifyBtn.hidden = true;
+      notifyBtn.hidden = false;
+      notifyBtn.title = "Notifications are not available in this browser";
+      notifyBtn.classList.remove("notify-on");
       return;
     }
     notifyBtn.hidden = false;
@@ -228,17 +271,22 @@
       notifyBtn.title = "Reply alerts on — tap for a test notification";
       notifyBtn.classList.add("notify-on");
     } else if (Notification.permission === "denied") {
-      notifyBtn.title = "Notifications blocked — change in iPhone Settings if needed";
+      notifyBtn.title = "Notifications blocked — iPhone: Settings → Apps → Safari → Notifications, or site settings";
       notifyBtn.classList.remove("notify-on");
     } else {
-      notifyBtn.title = "Tap to enable alerts when reply options are ready (works best from Home Screen)";
+      notifyBtn.title = "Tap to allow notifications when replies are ready (iPhone: use Home Screen app)";
       notifyBtn.classList.remove("notify-on");
     }
   }
 
   if (notifyBtn) {
     notifyBtn.addEventListener("click", async () => {
-      if (typeof Notification === "undefined") return;
+      if (typeof Notification === "undefined") {
+        statusText.textContent =
+          "This browser does not support notifications. Try Safari on iPhone, or Chrome/Edge on desktop.";
+        statusBanner.classList.add("active");
+        return;
+      }
       if (Notification.permission === "granted") {
         try {
           new Notification("Wingman", {
@@ -250,23 +298,51 @@
         return;
       }
       if (Notification.permission === "denied") {
-        statusText.textContent = "Notifications are blocked for this site in Settings.";
+        statusText.textContent =
+          "Notifications are off for this site. On iPhone: Settings → Apps → Safari → Notifications, or open the site in Safari (aA) → Website Settings.";
         statusBanner.classList.add("active");
         return;
       }
-      try {
-        const p = await Notification.requestPermission();
-        updateNotifyBtn();
-        if (p === "granted") {
-          try {
-            new Notification("Wingman", {
-              body: "Alerts enabled — switch away while generating to get notified.",
-              tag: "wingman-test",
-              icon: notifyIconUrl(),
-            });
-          } catch (_) {}
+      if (!window.isSecureContext) {
+        statusText.textContent = "Notifications require HTTPS (secure connection).";
+        statusBanner.classList.add("active");
+        return;
+      }
+
+      const before = Notification.permission;
+      const p = await requestNotificationPermissionCompat();
+      updateNotifyBtn();
+
+      if (p === "granted") {
+        try {
+          new Notification("Wingman", {
+            body: "Alerts enabled — switch away while generating to get notified.",
+            tag: "wingman-test",
+            icon: notifyIconUrl(),
+          });
+        } catch (_) {}
+        statusText.textContent = "Notifications allowed — you will get alerts when replies are ready.";
+        statusBanner.classList.add("active");
+        return;
+      }
+
+      if (p === "denied") {
+        statusText.textContent = "Notifications were blocked. You can allow them in browser or system Settings.";
+        statusBanner.classList.add("active");
+        return;
+      }
+
+      if (p === "default" && before === "default") {
+        const ios = typeof navigator !== "undefined" && /iPhone|iPad|iPod/i.test(navigator.userAgent);
+        if (ios && !isStandalonePwa()) {
+          statusText.textContent =
+            "iPhone: Add Wingman to your Home Screen (Share → Add to Home Screen), open from the icon, then tap the bell again.";
+        } else {
+          statusText.textContent =
+            "No permission prompt appeared. Try Settings → Safari → Advanced, or allow notifications for this website in site settings.";
         }
-      } catch (_) {}
+        statusBanner.classList.add("active");
+      }
     });
     updateNotifyBtn();
   }
