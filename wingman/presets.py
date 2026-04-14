@@ -46,3 +46,16 @@ class PresetStore:
         if 0 <= index < len(self._presets):
             return self._presets[index]["instruction"]
         return ""
+
+    def replace_all(self, items: list[dict]) -> None:
+        """Replace goals with validated {name, instruction} dicts (import from JSON)."""
+        out: list[dict] = []
+        for p in items:
+            if not isinstance(p, dict):
+                continue
+            name = str(p.get("name", "")).strip()
+            instr = str(p.get("instruction", "")).strip()
+            if name and instr:
+                out.append({"name": name, "instruction": instr})
+        self._presets = out
+        self._save()
