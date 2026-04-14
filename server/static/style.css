@@ -288,6 +288,11 @@ select {
 .contact-label {
   font-size: 14px; font-weight: 600; color: var(--accent);
   margin-bottom: 4px; flex-shrink: 0;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ── Results: transcript left, replies right — FILLS all space ───────── */
@@ -420,9 +425,24 @@ section h2 {
   display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px;
   flex-shrink: 0; padding: 8px; background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius);
+  max-width: 100%;
+  overflow-x: hidden;
+  box-sizing: border-box;
+}
+.preset-select-wrap {
+  flex: 1 1 140px;
+  min-width: 0;
+  max-width: 100%;
 }
 .presets-bar select {
-  flex: 1; background: var(--surface-2); color: var(--text);
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--surface-2); color: var(--text);
   border: 1px solid var(--border); padding: 5px 8px;
   border-radius: 6px; font-size: 12px; outline: none;
 }

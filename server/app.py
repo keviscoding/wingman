@@ -120,7 +120,7 @@ async def index():
     html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
     if HEADLESS:
         html = html.replace("<html lang=\"en\">", "<html lang=\"en\" class=\"headless-mobile\">", 1)
-        inject = '  <link rel="stylesheet" href="/static/mobile.css?v=6">\n'
+        inject = '  <link rel="stylesheet" href="/static/mobile.css?v=7">\n'
         html = html.replace("</head>", inject + "</head>", 1)
     return Response(content=html, media_type="text/html")
 

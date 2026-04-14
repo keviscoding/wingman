@@ -646,11 +646,14 @@
     }
 
     if (s.contact) {
-      contactLabel.textContent = "Chat with " + s.contact;
+      const line = "Chat with " + s.contact;
+      contactLabel.textContent = line;
+      contactLabel.title = line;
       if (readContactInput && !readContactInput.value.trim()) readContactInput.value = s.contact;
       if (contactInput && !contactInput.value.trim()) contactInput.value = s.contact;
     } else {
       contactLabel.textContent = "";
+      contactLabel.title = "";
     }
 
     if (s.contacts && s.contacts.length) {
@@ -697,12 +700,14 @@
     if (s.messages > 0 || s.has_replies) results.classList.remove("hidden");
 
     if (s.presets) {
+      lastPresetsList = s.presets;
       const current = presetSelect.value;
       presetSelect.innerHTML = '<option value="-1">No goal (default)</option>' +
         s.presets.map((p, i) =>
           `<option value="${i}"${i === s.active_preset ? " selected" : ""}>${esc(p.name)}</option>`
         ).join("");
       if (current !== presetSelect.value) presetSelect.value = s.active_preset;
+      updatePresetSelectTitle();
     }
 
     if (s.training_status === "loaded") {
@@ -720,6 +725,24 @@
   // ── Rendering ─────────────────────────────────────────────────────
 
   let lastTranscriptCount = 0;
+  let lastPresetsList = [];
+
+  function updatePresetSelectTitle() {
+    if (!presetSelect) return;
+    const idx = parseInt(presetSelect.value, 10);
+    if (idx < 0 || !lastPresetsList.length) {
+      presetSelect.title = "Choose a goal";
+      return;
+    }
+    const p = lastPresetsList[idx];
+    if (!p) {
+      presetSelect.title = "";
+      return;
+    }
+    const n = (p.name || "").trim();
+    const instr = (p.instruction || "").trim();
+    presetSelect.title = instr ? `${n}\n\n${instr}` : n;
+  }
 
   function renderTranscript(messages) {
     if (!messages || !messages.length) {
@@ -860,6 +883,7 @@
 
   presetSelect.addEventListener("change", () => {
     send({ action: "set_preset", index: parseInt(presetSelect.value) });
+    updatePresetSelectTitle();
   });
 
   addPresetBtn.addEventListener("click", () => {
@@ -1130,6 +1154,7 @@
     repliesEl.innerHTML = "";
     msgCountEl.textContent = "";
     contactLabel.textContent = "";
+    contactLabel.title = "";
     coachSection.classList.add("hidden");
     results.classList.add("hidden");
   });

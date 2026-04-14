@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Wingman">
   <meta name="theme-color" content="#0a0a0f">
-  <link rel="stylesheet" href="/static/style.css?v=44">
+  <link rel="stylesheet" href="/static/style.css?v=45">
 </head>
 <body>
   <div id="app">
@@ -127,9 +127,11 @@
               <div class="coach-advice" id="coachAdvice"></div>
             </div>
             <div class="presets-bar">
+              <div class="preset-select-wrap">
               <select id="presetSelect">
                 <option value="-1">No goal (default)</option>
               </select>
+              </div>
               <button type="button" class="preset-add-btn" id="addPresetBtn" title="Save a new goal preset">+ New goal</button>
               <button type="button" class="preset-io-btn" id="exportPresetsBtn"
                 title="Download wingman-bundle.json: goals, training transcripts, and saved chats">Export</button>
@@ -154,6 +156,6 @@
 
     <div id="toast" class="toast">Copied!</div>
   </div>
-  <script src="/static/app.js?v=53"></script>
+  <script src="/static/app.js?v=54"></script>
 </body>
 </html>

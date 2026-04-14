@@ -21,6 +21,7 @@ html.headless-mobile #app {
   margin: 0 auto;
   padding: 8px 14px calc(20px + env(safe-area-inset-bottom));
   padding-top: calc(8px + env(safe-area-inset-top));
+  overflow-x: hidden;
 }
 
 /* No live screen / desktop capture */
@@ -230,13 +231,17 @@ html.headless-mobile .results {
   gap: 16px;
   flex: 1 1 auto;
   min-height: 0;
-  overflow: visible;
+  overflow-x: hidden;
+  overflow-y: visible;
+  max-width: 100%;
 }
 
 html.headless-mobile .replies-panel {
   order: -1;
   min-height: 0;
-  overflow: visible;
+  overflow-x: hidden;
+  overflow-y: visible;
+  max-width: 100%;
 }
 
 html.headless-mobile .transcript-panel {
@@ -283,10 +288,19 @@ html.headless-mobile .presets-bar {
   gap: 10px;
 }
 
+html.headless-mobile .preset-select-wrap {
+  flex: 1 1 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
 html.headless-mobile .presets-bar select {
   font-size: 15px;
   padding: 10px 12px;
   border-radius: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 html.headless-mobile .preset-add-btn {
