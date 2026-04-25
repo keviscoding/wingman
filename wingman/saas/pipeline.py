@@ -17,8 +17,8 @@ import time
 import uuid
 from pathlib import Path
 
-from wingman.chat_store import ChatStore
 from wingman.transcript import ConversationState, Message
+from . import db
 from .user_context import UserContext
 
 
@@ -96,23 +96,19 @@ async def _extract_chat_from_image(img_bytes: bytes) -> tuple[str, list[dict]]:
 
 
 def record_reply_copy(ctx: UserContext, chat_id: str, label: str, text: str) -> None:
-    log_path = ctx.root / "reply_copies.jsonl"
-    rec = {
-        "ts": int(time.time()),
-        "chat_id": chat_id,
-        "label": label,
-        "text": text,
-    }
-    with log_path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    # Stash on the chat meta so the chats list can show "last copied:
-    # BOLD" — quick visual recall of which tone the user picked last.
+    """Stash the last-copied angle on the chat row so the chats list
+    can show 'BOLD · last copied' — quick visual recall of which
+    tone the user picked last. The fuller copy-event audit log is
+    intentionally dropped during the Postgres migration; we'll add
+    a copy_events table later when we want it for v5 training data."""
     try:
-        store = _user_chat_store(ctx)
-        meta = store.load_meta(chat_id)
+        chat = db.chat_load(ctx.user_id, chat_id)
+        if not chat:
+            return
+        meta = chat["meta"]
         meta["last_copied_angle"] = label
         meta["last_copied_at"] = int(time.time())
-        store.save_meta(chat_id, meta)
+        db.chat_save_meta(ctx.user_id, chat_id, meta)
     except Exception:
         pass
 
@@ -122,54 +118,43 @@ def record_reply_copy(ctx: UserContext, chat_id: str, label: str, text: str) -> 
 # ---------------------------------------------------------------------------
 
 
-def _user_chat_store(ctx: UserContext) -> ChatStore:
-    """Each user gets a dedicated ChatStore rooted in their data dir.
-    The class accepts a ``store_dir`` arg — we just point it there."""
-    return ChatStore(store_dir=ctx.chats_dir)
-
-
 def list_chats_for_user(ctx: UserContext) -> dict:
-    store = _user_chat_store(ctx)
-    contacts = store.list_contacts()
+    """Returns every chat the user has stored. Backed by the Postgres
+    chats table (was filesystem JSON pre-2026-04-26). Same response
+    shape so the mobile client doesn't notice the migration."""
+    rows = db.chat_list(ctx.user_id)
     out = []
-    for c in contacts:
-        meta = store.load_meta(c)
-        msgs = store.load(c)
+    for r in rows:
+        msgs = r["messages"]
+        meta = r["meta"]
         last_text = ""
         last_speaker = ""
         if msgs:
             last_text = (msgs[-1].get("text") or "")[:120]
             last_speaker = msgs[-1].get("speaker", "")
-        # Best-effort enrichment from chat meta. These were populated
-        # by recent quick-capture / reply-copy events; if absent we
-        # just send null and the mobile UI hides the badge.
-        source = meta.get("source")
-        last_copied_angle = meta.get("last_copied_angle")
         out.append({
-            "id": c,
-            "contact": c,
+            "id": r["contact"],  # mobile uses the contact name as id
+            "contact": r["contact"],
             "msg_count": len(msgs),
             "last_text": last_text,
             "last_speaker": last_speaker,
-            "last_activity_at": meta.get("last_activity_at", 0),
+            "last_activity_at": r["last_activity_at"],
             "has_replies": bool(meta.get("last_replies")),
-            "source": source,
-            "last_copied_angle": last_copied_angle,
+            "source": meta.get("source"),
+            "last_copied_angle": meta.get("last_copied_angle"),
         })
-    out.sort(key=lambda d: d["last_activity_at"], reverse=True)
     return {"chats": out}
 
 
 def get_chat_for_user(ctx: UserContext, chat_id: str) -> dict | None:
-    store = _user_chat_store(ctx)
-    msgs = store.load(chat_id)
-    if not msgs:
+    chat = db.chat_load(ctx.user_id, chat_id)
+    if not chat or not chat["messages"]:
         return None
-    meta = store.load_meta(chat_id)
+    meta = chat["meta"]
     return {
         "id": chat_id,
-        "contact": chat_id,
-        "messages": msgs,
+        "contact": chat["contact"],
+        "messages": chat["messages"],
         "replies": meta.get("last_replies", []),
         "read": meta.get("last_read", ""),
         "advice": meta.get("last_advice", ""),
@@ -177,7 +162,7 @@ def get_chat_for_user(ctx: UserContext, chat_id: str) -> dict | None:
 
 
 def delete_chat_for_user(ctx: UserContext, chat_id: str) -> None:
-    _user_chat_store(ctx).delete(chat_id)
+    db.chat_delete(ctx.user_id, chat_id)
 
 
 # ---------------------------------------------------------------------------
@@ -206,17 +191,18 @@ async def quick_capture_for_user(
     if not contact_name:
         contact_name = f"Chat {int(time.time())}"
 
-    # Step 2: persist to per-user chat store
-    store = _user_chat_store(ctx)
-    existing = store.load(contact_name) or []
-    have = {(m.get("speaker"), m.get("text")) for m in existing}
-    appended = list(existing)
+    # Step 2: persist to per-user chat store (Postgres-backed)
+    existing = db.chat_load(ctx.user_id, contact_name)
+    existing_msgs = existing["messages"] if existing else []
+    existing_meta = existing["meta"] if existing else {}
+    have = {(m.get("speaker"), m.get("text")) for m in existing_msgs}
+    appended = list(existing_msgs)
     for m in new_msgs:
         key = (m.get("speaker"), m.get("text"))
         if key not in have:
             appended.append(m)
             have.add(key)
-    store.save_raw(contact_name, appended)
+    db.chat_save(ctx.user_id, contact_name, appended, existing_meta)
 
     # Step 3: generate replies — route by mode
     conv = ConversationState()
@@ -233,12 +219,11 @@ async def quick_capture_for_user(
         )
 
     # Step 4: persist replies on the chat meta
-    meta = store.load_meta(contact_name)
-    meta["last_replies"] = replies
-    meta["last_read"] = read
-    meta["last_advice"] = advice
-    meta["last_generated_at"] = time.time()
-    store.save_meta(contact_name, meta)
+    existing_meta["last_replies"] = replies
+    existing_meta["last_read"] = read
+    existing_meta["last_advice"] = advice
+    existing_meta["last_generated_at"] = time.time()
+    db.chat_save_meta(ctx.user_id, contact_name, existing_meta)
 
     return {
         "chat_id": contact_name,
@@ -261,12 +246,11 @@ async def regenerate_for_user(
     extra_context: str = "",
     mode: str = "fast",
 ) -> dict:
-    store = _user_chat_store(ctx)
-    msgs = store.load(chat_id)
-    if not msgs:
+    chat = db.chat_load(ctx.user_id, chat_id)
+    if not chat or not chat["messages"]:
         raise KeyError(chat_id)
     conv = ConversationState()
-    conv.ingest_parsed_messages(msgs)
+    conv.ingest_parsed_messages(chat["messages"])
     if mode == "pro":
         replies, read, advice, model_tag, cost = await _generate_pro_for_user_messages(
             ctx, conv.messages, extra_context=extra_context,
@@ -275,12 +259,12 @@ async def regenerate_for_user(
         replies, read, advice, model_tag, cost = await _generate_for_user_messages(
             ctx, conv.messages, extra_context=extra_context,
         )
-    meta = store.load_meta(chat_id)
+    meta = chat["meta"]
     meta["last_replies"] = replies
     meta["last_read"] = read
     meta["last_advice"] = advice
     meta["last_generated_at"] = time.time()
-    store.save_meta(chat_id, meta)
+    db.chat_save_meta(ctx.user_id, chat_id, meta)
     return {
         "chat_id": chat_id,
         "contact": chat_id,

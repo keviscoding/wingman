@@ -1,22 +1,28 @@
-"""SQLite-backed user store. Intentionally minimal — bigger plans
-later (move to Postgres on Railway when we scale). For MVP, SQLite
-gives us atomic writes, indexed lookups, and zero infra to manage.
+"""User store. Dual-backend: Postgres in prod, SQLite for local dev.
 
-Schema:
-  users        — accounts (id, email, password_hash, created_at,
-                  display_name, plan, lifetime_gens_used, daily_count,
-                  daily_window_start)
-  sessions     — JWT refresh tracking (optional, primarily for revoke)
-  generations  — audit trail of every reply call (id, user_id, ts, cost_cents)
+When ``DATABASE_URL`` env var is set (DigitalOcean / Railway / wherever
+managed Postgres is wired in), all queries go through psycopg. When
+it's unset (local laptop, tests, the desktop server), we fall back to
+the stdlib SQLite at ``data/saas/wingman.sqlite3``.
 
-Why audit-trail every generation? Three reasons:
-  1. Quota enforcement against gaming the daily window
-  2. Cost-per-user analytics (margin tracking)
-  3. Future training data: 'best replies by usage' if a user copies one
+The two backends share a SQL surface that's nearly identical — the
+only meaningful gap is parameter placeholders (``?`` vs ``%s``), which
+the helper below rewrites at query time. Schema is written in Postgres
+syntax and the SQLite path translates ``BIGSERIAL`` etc. on init.
+
+Tables:
+  users        — accounts (plan, push_token, quotas)
+  sessions     — JWT revocation
+  generations  — audit trail of every reply call
+  jobs         — async generation queue (mobile polls / receives push)
+  chats        — per-user chats (NEW; replaces filesystem JSON storage
+                 so chats survive container redeploys and scale
+                 horizontally)
 """
 
 from __future__ import annotations
 
+import json
 import os
 import secrets
 import sqlite3
@@ -26,6 +32,12 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
+# ─────────────── Backend selection ───────────────
+
+_PG_URL = (os.getenv("DATABASE_URL") or "").strip()
+USE_PG = _PG_URL.startswith("postgres://") or _PG_URL.startswith("postgresql://")
+
+# Local SQLite fallback path (only used when USE_PG is False)
 DB_PATH = Path(os.getenv("WINGMAN_SAAS_DB", "data/saas/wingman.sqlite3"))
 
 
@@ -33,116 +45,303 @@ def _ensure_dir() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
+# psycopg is only imported when needed so SQLite-only environments
+# (the desktop server, tests) don't have to install it.
+def _pg_connect():
+    import psycopg
+    from psycopg.rows import dict_row
+
+    return psycopg.connect(
+        _PG_URL,
+        row_factory=dict_row,
+        autocommit=False,
+    )
+
+
+class _DictRow(dict):
+    """Wrap a dict so callers can use ``row[i]`` semantics from SQLite or
+    ``row["col"]`` semantics from Postgres interchangeably."""
+
+    def __getitem__(self, key):
+        return super().__getitem__(key)
+
+    def keys(self):
+        return super().keys()
+
+
+class _Cursor:
+    """Thin wrapper around either sqlite3.Cursor or psycopg.Cursor that
+    rewrites ``?`` placeholders to ``%s`` for Postgres, and returns
+    dict-shaped rows from both."""
+
+    def __init__(self, raw_cursor, is_pg: bool):
+        self._c = raw_cursor
+        self._is_pg = is_pg
+
+    def execute(self, sql: str, params: tuple | list = ()):
+        if self._is_pg:
+            sql = sql.replace("?", "%s")
+        self._c.execute(sql, params)
+        return self
+
+    def fetchone(self):
+        row = self._c.fetchone()
+        if row is None:
+            return None
+        if self._is_pg:
+            return _DictRow(row)
+        # sqlite3.Row supports both index and key access; copy to dict
+        return _DictRow({k: row[k] for k in row.keys()})
+
+    def fetchall(self):
+        rows = self._c.fetchall()
+        if self._is_pg:
+            return [_DictRow(r) for r in rows]
+        return [_DictRow({k: r[k] for k in r.keys()}) for r in rows]
+
+
+class _Connection:
+    """Wraps either sqlite3.Connection or psycopg.Connection so callers
+    have one shape. Used as a context manager (commits on success,
+    rolls back on error)."""
+
+    def __init__(self, raw, is_pg: bool):
+        self._raw = raw
+        self._is_pg = is_pg
+
+    def execute(self, sql: str, params: tuple | list = ()):
+        if self._is_pg:
+            sql = sql.replace("?", "%s")
+            cur = self._raw.cursor()
+            cur.execute(sql, params)
+            return _Cursor(cur, True)
+        cur = self._raw.execute(sql, params)
+        return _Cursor(cur, False)
+
+    def executescript(self, script: str):
+        if self._is_pg:
+            # psycopg has no executescript; split on semicolons after
+            # stripping comments/blank lines. Postgres-compatible DDL.
+            for stmt in _split_sql(script):
+                if stmt:
+                    self._raw.cursor().execute(stmt)
+        else:
+            self._raw.executescript(script)
+
+    def commit(self):
+        self._raw.commit()
+
+    def rollback(self):
+        self._raw.rollback()
+
+    def close(self):
+        self._raw.close()
+
+
+def _split_sql(script: str) -> list[str]:
+    """Naive multi-statement splitter — strips line comments and splits
+    on `;`. Good enough for our schema (no string literals contain ';')."""
+    out, buf = [], []
+    for line in script.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("--"):
+            continue
+        buf.append(line)
+        if stripped.endswith(";"):
+            out.append("\n".join(buf).rstrip(";").strip())
+            buf = []
+    if buf:
+        tail = "\n".join(buf).strip()
+        if tail:
+            out.append(tail.rstrip(";"))
+    return [s for s in out if s.strip()]
+
+
 @contextmanager
-def connect() -> Iterator[sqlite3.Connection]:
-    """Per-call connection. SQLite is fine for our scale; no pool needed."""
-    _ensure_dir()
-    conn = sqlite3.connect(str(DB_PATH), timeout=30.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
+def connect() -> Iterator[_Connection]:
+    """Per-call connection. Commits on clean exit, rolls back on error.
+    Postgres uses real connection pooling under the hood at psycopg's
+    layer; SQLite is fine without a pool at our scale."""
+    if USE_PG:
+        raw = _pg_connect()
+        wrapped = _Connection(raw, is_pg=True)
+    else:
+        _ensure_dir()
+        raw = sqlite3.connect(str(DB_PATH), timeout=30.0)
+        raw.row_factory = sqlite3.Row
+        raw.execute("PRAGMA journal_mode=WAL")
+        raw.execute("PRAGMA foreign_keys=ON")
+        wrapped = _Connection(raw, is_pg=False)
     try:
-        yield conn
-        conn.commit()
+        yield wrapped
+        wrapped.commit()
     except Exception:
-        conn.rollback()
+        try:
+            wrapped.rollback()
+        except Exception:
+            pass
         raise
     finally:
-        conn.close()
+        wrapped.close()
 
 
-SCHEMA = """
+# ─────────────── Schema ───────────────
+#
+# Postgres-flavored DDL. The few SQLite-isms (AUTOINCREMENT, PRAGMA)
+# we need are translated at init time. ``BIGINT`` is used everywhere
+# we'd otherwise want INT — both backends accept it.
+
+SCHEMA_PG = """
 CREATE TABLE IF NOT EXISTS users (
   id                   TEXT PRIMARY KEY,
   email                TEXT NOT NULL UNIQUE,
   password_hash        TEXT NOT NULL,
   display_name         TEXT,
   plan                 TEXT NOT NULL DEFAULT 'free',
-  -- counters used to enforce quotas without scanning generations table
-  lifetime_gens_used   INTEGER NOT NULL DEFAULT 0,
-  daily_count          INTEGER NOT NULL DEFAULT 0,
-  -- High-quality (Pro) generations are gated separately from Fast.
-  -- Free trial: 2 lifetime Pro to taste-test, then locked to paid users.
-  pro_lifetime_used    INTEGER NOT NULL DEFAULT 0,
-  pro_daily_count      INTEGER NOT NULL DEFAULT 0,
-  -- start of the current rolling 24h window (epoch seconds)
-  daily_window_start   INTEGER NOT NULL DEFAULT 0,
-  created_at           INTEGER NOT NULL,
-  -- nullable: when subscription expires; NULL means free tier
-  subscription_until   INTEGER,
-  -- Expo Push Token (ExponentPushToken[...]) — one per user. We fire
-  -- through Expo's Push API whenever a generation completes so the
-  -- notification arrives even when JS is suspended.
+  lifetime_gens_used   BIGINT NOT NULL DEFAULT 0,
+  daily_count          BIGINT NOT NULL DEFAULT 0,
+  pro_lifetime_used    BIGINT NOT NULL DEFAULT 0,
+  pro_daily_count      BIGINT NOT NULL DEFAULT 0,
+  daily_window_start   BIGINT NOT NULL DEFAULT 0,
+  created_at           BIGINT NOT NULL,
+  subscription_until   BIGINT,
   push_token           TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
-  jti           TEXT PRIMARY KEY,           -- JWT id
-  user_id       TEXT NOT NULL,
-  issued_at     INTEGER NOT NULL,
-  expires_at    INTEGER NOT NULL,
-  revoked       INTEGER NOT NULL DEFAULT 0,
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  jti           TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  issued_at     BIGINT NOT NULL,
+  expires_at    BIGINT NOT NULL,
+  revoked       BIGINT NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id);
 
 CREATE TABLE IF NOT EXISTS generations (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id       TEXT NOT NULL,
-  ts            INTEGER NOT NULL,
-  model         TEXT NOT NULL,         -- pro / flash / tuned-v4 / deepseek / ...
-  cost_cents    REAL NOT NULL DEFAULT 0,
-  reply_count   INTEGER NOT NULL DEFAULT 5,
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  id            BIGSERIAL PRIMARY KEY,
+  user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ts            BIGINT NOT NULL,
+  model         TEXT NOT NULL,
+  cost_cents    DOUBLE PRECISION NOT NULL DEFAULT 0,
+  reply_count   BIGINT NOT NULL DEFAULT 5
 );
 CREATE INDEX IF NOT EXISTS generations_user_idx ON generations(user_id, ts);
 
--- Async generation jobs. Mobile polls / receives push; never blocks
--- the upload request through 10+ seconds of Pro generation.
 CREATE TABLE IF NOT EXISTS jobs (
   id            TEXT PRIMARY KEY,
-  user_id       TEXT NOT NULL,
-  status        TEXT NOT NULL,          -- queued / running / ready / error
-  mode          TEXT NOT NULL,          -- fast / pro
+  user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status        TEXT NOT NULL,
+  mode          TEXT NOT NULL,
   contact       TEXT,
   chat_id       TEXT,
-  result_json   TEXT,                   -- full QuickCaptureResponse on ready
-  error_detail  TEXT,                   -- machine-friendly on error
-  created_at    INTEGER NOT NULL,
-  updated_at    INTEGER NOT NULL,
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  result_json   TEXT,
+  error_detail  TEXT,
+  created_at    BIGINT NOT NULL,
+  updated_at    BIGINT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS jobs_user_idx ON jobs(user_id, created_at);
+
+CREATE TABLE IF NOT EXISTS chats (
+  id                TEXT PRIMARY KEY,
+  user_id           TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  contact           TEXT NOT NULL,
+  messages_json     TEXT NOT NULL DEFAULT '[]',
+  meta_json         TEXT NOT NULL DEFAULT '{}',
+  last_activity_at  DOUBLE PRECISION NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS chats_user_idx ON chats(user_id, last_activity_at);
+CREATE UNIQUE INDEX IF NOT EXISTS chats_user_contact_idx ON chats(user_id, contact);
 """
+
+# SQLite version uses AUTOINCREMENT instead of BIGSERIAL. Otherwise
+# identical.
+SCHEMA_SQLITE = SCHEMA_PG.replace(
+    "id            BIGSERIAL PRIMARY KEY",
+    "id            INTEGER PRIMARY KEY AUTOINCREMENT",
+).replace(
+    "REFERENCES users(id) ON DELETE CASCADE",
+    "REFERENCES users(id) ON DELETE CASCADE",  # same
+)
 
 
 def init_db() -> None:
-    """Apply SCHEMA. ``executescript`` handles multi-statement DDL
-    including inline comments — safer than naive split-on-semicolon
-    which gets confused by comments / string literals.
-
-    Runs an idempotent migration after CREATE TABLE so an existing
-    `users` table from a prior deploy gets the new pro-quota columns
-    backfilled to defaults (SQLite ALTER TABLE ADD COLUMN).
-    """
+    """Apply schema. Idempotent — every CREATE uses IF NOT EXISTS, and
+    we additively add any missing columns on existing deployments."""
+    schema = SCHEMA_PG if USE_PG else SCHEMA_SQLITE
     with connect() as conn:
-        conn.executescript(SCHEMA)
-        cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
-        if "pro_lifetime_used" not in cols:
-            conn.execute(
-                "ALTER TABLE users ADD COLUMN pro_lifetime_used INTEGER NOT NULL DEFAULT 0"
-            )
-        if "pro_daily_count" not in cols:
-            conn.execute(
-                "ALTER TABLE users ADD COLUMN pro_daily_count INTEGER NOT NULL DEFAULT 0"
-            )
-        if "push_token" not in cols:
-            conn.execute("ALTER TABLE users ADD COLUMN push_token TEXT")
+        conn.executescript(schema)
+        # Backfill columns added after the initial schema. Safe to run
+        # every boot — no-op if the column already exists.
+        _backfill_column(conn, "users", "pro_lifetime_used", "BIGINT NOT NULL DEFAULT 0")
+        _backfill_column(conn, "users", "pro_daily_count", "BIGINT NOT NULL DEFAULT 0")
+        _backfill_column(conn, "users", "push_token", "TEXT")
+
+
+def _backfill_column(conn: _Connection, table: str, col: str, type_decl: str) -> None:
+    """Add a column if it doesn't exist. Cross-DB compatible."""
+    if USE_PG:
+        # Postgres: information_schema query
+        cur = conn.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = ? AND column_name = ?",
+            (table, col),
+        )
+        if cur.fetchone():
+            return
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {type_decl}")
+    else:
+        cur = conn.execute(f"PRAGMA table_info({table})")
+        cols = {r["name"] for r in cur.fetchall()}
+        if col not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {type_decl}")
+
+
+# ─────────────── User helpers ───────────────
+
+
+def new_user_id() -> str:
+    return secrets.token_urlsafe(16)
+
+
+def get_user_by_email(email: str) -> dict | None:
+    with connect() as conn:
+        # Postgres has no NOCASE collation; lower() on both sides works
+        # for both backends.
+        row = conn.execute(
+            "SELECT * FROM users WHERE lower(email) = lower(?)",
+            (email.strip().lower(),),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_user_by_id(user_id: str) -> dict | None:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def create_user(email: str, password_hash: str,
+                display_name: str | None = None) -> dict:
+    user_id = new_user_id()
+    now = int(time.time())
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO users
+                (id, email, password_hash, display_name, plan, created_at)
+            VALUES (?, ?, ?, ?, 'free', ?)
+            """,
+            (user_id, email.strip().lower(), password_hash, display_name, now),
+        )
+        row = conn.execute(
+            "SELECT * FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+        return dict(row)
 
 
 def set_push_token(user_id: str, token: str | None) -> None:
-    """Update the device push token for a user. Pass None / empty to
-    clear it (e.g. on sign-out)."""
     with connect() as conn:
         conn.execute(
             "UPDATE users SET push_token = ? WHERE id = ?",
@@ -155,9 +354,7 @@ def get_push_token(user_id: str) -> str | None:
     return user.get("push_token") if user else None
 
 
-# ---------------------------------------------------------------------------
-# Job helpers — for the async quick-capture pipeline.
-# ---------------------------------------------------------------------------
+# ─────────────── Job helpers ───────────────
 
 
 def create_job(job_id: str, user_id: str, mode: str = "fast") -> None:
@@ -202,7 +399,6 @@ def update_job(
 
 
 def get_job(job_id: str, user_id: str) -> dict | None:
-    """Returns the job row only if it belongs to this user (auth check)."""
     with connect() as conn:
         row = conn.execute(
             "SELECT * FROM jobs WHERE id = ? AND user_id = ?",
@@ -211,75 +407,19 @@ def get_job(job_id: str, user_id: str) -> dict | None:
         return dict(row) if row else None
 
 
-# ---------------------------------------------------------------------------
-# User helpers (small surface — auth.py handles password hashing)
-# ---------------------------------------------------------------------------
-
-
-def new_user_id() -> str:
-    """URL-safe random id. 22 chars of entropy = 132 bits."""
-    return secrets.token_urlsafe(16)
-
-
-def get_user_by_email(email: str) -> dict | None:
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT * FROM users WHERE email = ? COLLATE NOCASE",
-            (email.strip().lower(),),
-        ).fetchone()
-        return dict(row) if row else None
-
-
-def get_user_by_id(user_id: str) -> dict | None:
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT * FROM users WHERE id = ?", (user_id,)
-        ).fetchone()
-        return dict(row) if row else None
-
-
-def create_user(email: str, password_hash: str,
-                display_name: str | None = None) -> dict:
-    user_id = new_user_id()
-    now = int(time.time())
-    with connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO users
-                (id, email, password_hash, display_name, plan, created_at)
-            VALUES (?, ?, ?, ?, 'free', ?)
-            """,
-            (user_id, email.strip().lower(), password_hash, display_name, now),
-        )
-        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
-        return dict(row)
-
-
-# ---------------------------------------------------------------------------
-# Generation tracking + quota helpers
-# ---------------------------------------------------------------------------
+# ─────────────── Generation tracking + quota ───────────────
 
 DAILY_WINDOW_S = 24 * 60 * 60
 
 
 def record_generation(user_id: str, model: str, cost_cents: float = 0,
                       reply_count: int = 5, mode: str = "fast") -> None:
-    """Atomically: log the generation, increment user counters, roll the
-    daily window if a day has elapsed. Single transaction so quota
-    can't be raced.
-
-    `mode` is "fast" or "pro". Both update the global lifetime/daily
-    counters; pro additionally bumps pro_lifetime_used / pro_daily_count
-    so we can gate the high-quality model independently.
-    """
     is_pro = mode == "pro"
     now = int(time.time())
     with connect() as conn:
         conn.execute(
-            """
-            INSERT INTO generations (user_id, ts, model, cost_cents, reply_count)
-            VALUES (?, ?, ?, ?, ?)
-            """,
+            "INSERT INTO generations (user_id, ts, model, cost_cents, reply_count) "
+            "VALUES (?, ?, ?, ?, ?)",
             (user_id, now, model, cost_cents, reply_count),
         )
         row = conn.execute(
@@ -319,39 +459,33 @@ def get_user_quota_state(user_id: str) -> dict:
     if not user:
         return {"valid": False}
     now = int(time.time())
-    # Auto-roll daily window if expired so the read is always fresh.
-    daily_count = user["daily_count"]
-    pro_daily = user["pro_daily_count"] if "pro_daily_count" in user.keys() else 0
-    if user["daily_window_start"] and (now - user["daily_window_start"]) >= DAILY_WINDOW_S:
+    daily_count = user.get("daily_count", 0)
+    pro_daily = user.get("pro_daily_count", 0)
+    if user.get("daily_window_start") and (now - user["daily_window_start"]) >= DAILY_WINDOW_S:
         daily_count = 0
         pro_daily = 0
     return {
         "valid": True,
         "plan": user["plan"],
-        "lifetime_used": user["lifetime_gens_used"],
+        "lifetime_used": user.get("lifetime_gens_used", 0),
         "daily_used": daily_count,
-        "pro_lifetime_used": user["pro_lifetime_used"] if "pro_lifetime_used" in user.keys() else 0,
+        "pro_lifetime_used": user.get("pro_lifetime_used", 0),
         "pro_daily_used": pro_daily,
-        "subscription_until": user["subscription_until"],
+        "subscription_until": user.get("subscription_until"),
         "is_subscribed": bool(
-            user["subscription_until"] and user["subscription_until"] > now
+            user.get("subscription_until") and user["subscription_until"] > now
         ),
     }
 
 
-# Free tier limits — we change these centrally, never hard-code in routes
-FREE_LIFETIME_TRIAL = 8        # Fast trials (the "default" model)
-FREE_PRO_LIFETIME_TRIAL = 2    # Pro trials — taster, then locked
-FREE_DAILY_LIMIT = 3           # Fast generations per rolling 24h after trial
-PAID_DAILY_LIMIT = 200         # Abuse cap for paid users (Fast OR Pro)
+# Free tier limits
+FREE_LIFETIME_TRIAL = 8
+FREE_PRO_LIFETIME_TRIAL = 2
+FREE_DAILY_LIMIT = 3
+PAID_DAILY_LIMIT = 200
 
 
 def can_generate(user_id: str, mode: str = "fast") -> tuple[bool, str]:
-    """Returns (allowed, reason_if_not). Reason strings are
-    machine-friendly so the mobile app can render specific UI.
-
-    `mode` is "fast" or "pro" — Pro is gated tighter on free accounts.
-    """
     q = get_user_quota_state(user_id)
     if not q["valid"]:
         return False, "user_not_found"
@@ -359,15 +493,162 @@ def can_generate(user_id: str, mode: str = "fast") -> tuple[bool, str]:
         if q["daily_used"] >= PAID_DAILY_LIMIT:
             return False, "daily_cap_paid"
         return True, ""
-    # Free tier
     if mode == "pro":
-        # Free Pro is lifetime-trial only — no daily refill after.
         if q["pro_lifetime_used"] < FREE_PRO_LIFETIME_TRIAL:
             return True, ""
         return False, "pro_locked_free"
-    # Fast mode: lifetime trial first, then daily allowance
     if q["lifetime_used"] < FREE_LIFETIME_TRIAL:
         return True, ""
     if q["daily_used"] >= FREE_DAILY_LIMIT:
         return False, "daily_cap_free"
     return True, ""
+
+
+# ─────────────── Chat helpers (NEW; replaces filesystem JSON) ───────────────
+#
+# Each chat lives as a single row with two JSON columns: one for the
+# message array, one for misc meta (last_replies, last_read,
+# last_advice, source, last_copied_angle, etc). Server-side logic
+# keeps the same contract as the old filesystem ChatStore but every
+# call now hits the database — chats persist across redeploys + scale
+# horizontally.
+
+
+def _chat_id_for(user_id: str, contact: str) -> str:
+    """Stable per-user-per-contact id. Same name → same row, so adding
+    new messages or rerunning regenerate updates the same record."""
+    safe = "".join(c if c.isalnum() or c in " _-" else "_" for c in contact).strip().lower()
+    return f"{user_id}:{safe}"
+
+
+def chat_save(user_id: str, contact: str, messages: list[dict],
+              meta: dict | None = None) -> None:
+    """Upsert a chat. ``messages`` is the full ordered list (we don't
+    do incremental appends in the DB layer — caller passes whatever
+    they want stored). Updates last_activity_at when the message set
+    has changed in any user-visible way (count or last text)."""
+    chat_id = _chat_id_for(user_id, contact)
+    msg_json = json.dumps(messages or [], ensure_ascii=False)
+    meta_json = json.dumps(meta or {}, ensure_ascii=False)
+    now = time.time()
+
+    with connect() as conn:
+        existing = conn.execute(
+            "SELECT messages_json, last_activity_at FROM chats WHERE id = ?",
+            (chat_id,),
+        ).fetchone()
+
+        if existing:
+            # Bump last_activity only if the message set actually changed
+            try:
+                old_msgs = json.loads(existing["messages_json"]) or []
+            except Exception:
+                old_msgs = []
+            old_last = old_msgs[-1].get("text", "") if old_msgs else ""
+            new_last = messages[-1].get("text", "") if messages else ""
+            new_activity = (
+                now if (len(old_msgs) != len(messages) or old_last != new_last)
+                else existing["last_activity_at"]
+            )
+            conn.execute(
+                """
+                UPDATE chats
+                   SET messages_json = ?,
+                       meta_json = ?,
+                       last_activity_at = ?
+                 WHERE id = ?
+                """,
+                (msg_json, meta_json, new_activity, chat_id),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO chats
+                    (id, user_id, contact, messages_json, meta_json,
+                     last_activity_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (chat_id, user_id, contact, msg_json, meta_json, now),
+            )
+
+
+def chat_load(user_id: str, contact: str) -> dict | None:
+    """Returns ``{"messages": [...], "meta": {...}, "last_activity_at": float}``
+    or None if the chat doesn't exist."""
+    chat_id = _chat_id_for(user_id, contact)
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM chats WHERE id = ? AND user_id = ?",
+            (chat_id, user_id),
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        messages = json.loads(row["messages_json"] or "[]")
+    except Exception:
+        messages = []
+    try:
+        meta = json.loads(row["meta_json"] or "{}")
+    except Exception:
+        meta = {}
+    return {
+        "id": row["id"],
+        "contact": row["contact"],
+        "messages": messages,
+        "meta": meta,
+        "last_activity_at": row["last_activity_at"] or 0,
+    }
+
+
+def chat_save_meta(user_id: str, contact: str, meta: dict) -> None:
+    """Update meta only — leaves messages untouched. Used by reply-copy
+    tracking and post-generation reply persistence."""
+    chat_id = _chat_id_for(user_id, contact)
+    meta_json = json.dumps(meta or {}, ensure_ascii=False)
+    with connect() as conn:
+        conn.execute(
+            "UPDATE chats SET meta_json = ? WHERE id = ?",
+            (meta_json, chat_id),
+        )
+
+
+def chat_list(user_id: str) -> list[dict]:
+    """Returns all chats for a user, newest activity first. Lightweight
+    summaries — caller calls chat_load() for full message arrays when
+    needed."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id, contact, messages_json, meta_json, last_activity_at "
+            "FROM chats WHERE user_id = ? ORDER BY last_activity_at DESC",
+            (user_id,),
+        ).fetchall()
+    out = []
+    for r in rows:
+        try:
+            msgs = json.loads(r["messages_json"] or "[]")
+        except Exception:
+            msgs = []
+        try:
+            meta = json.loads(r["meta_json"] or "{}")
+        except Exception:
+            meta = {}
+        out.append({
+            "id": r["id"],
+            "contact": r["contact"],
+            "messages": msgs,
+            "meta": meta,
+            "last_activity_at": r["last_activity_at"] or 0,
+        })
+    return out
+
+
+def chat_delete(user_id: str, contact_or_id: str) -> None:
+    """Delete by either contact name or stored id (the chat list returns
+    ids; the mobile API also passes contact names sometimes)."""
+    by_id = contact_or_id
+    by_contact_id = _chat_id_for(user_id, contact_or_id)
+    with connect() as conn:
+        conn.execute(
+            "DELETE FROM chats WHERE user_id = ? AND (id = ? OR id = ?)",
+            (user_id, by_id, by_contact_id),
+        )

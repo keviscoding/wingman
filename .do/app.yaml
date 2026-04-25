@@ -97,6 +97,14 @@ services:
         scope: RUN_TIME
         type: SECRET
 
+      # ── Postgres (managed by DO; bound via the dev/managed
+      #    database component named `db`). Populated automatically by
+      #    DO at runtime from the attached database — we just declare
+      #    the binding here.
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: "${db.DATABASE_URL}"
+
 # Persistent volume — keeps user data across deploys and restarts.
 # Mounted at /app/data (where the SQLite + chat JSONs live).
 # 5 GB = $0.50/mo, more than enough for thousands of users.
