@@ -38,6 +38,11 @@ export function setProcessedScreenshotId(id: string | null) {
   notify(null);
 }
 
+// Don't auto-fire (or banner-fire) for anything older than this. Home
+// screen's scan() uses 90s for auto-fire; the banner uses up to 5 min
+// for older-but-still-relevant prompting.
+const AUTO_FIRE_MAX_AGE_S = 90;
+
 async function scanAndNotify() {
   if (inFlight) return;
   inFlight = true;
@@ -58,6 +63,20 @@ async function scanAndNotify() {
     }
     if (s.ageSeconds > MAX_FRESH_AGE_S) {
       notify(null);
+      return;
+    }
+    // RACE FIX: if this screenshot is fresh enough that the home
+    // screen's auto-fire might claim it, hold the banner for a short
+    // window. If home's scan() ends up enqueueing, it'll call
+    // setProcessedScreenshotId which immediately notifies(null) and
+    // wipes the banner. If it doesn't, we surface the banner after
+    // the grace period.
+    if (s.ageSeconds <= AUTO_FIRE_MAX_AGE_S) {
+      setTimeout(() => {
+        if (s.id === processedId) return; // home claimed it
+        if (s.id === dismissedId) return;
+        notify(s);
+      }, 600);
       return;
     }
     notify(s);

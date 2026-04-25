@@ -12,33 +12,30 @@
 
 import * as Updates from "expo-updates";
 
-let lastChecked = 0;
-const MIN_INTERVAL_MS = 5 * 60_000; // don't check more than once every 5 min
+let inFlight = false;
 
-/** Best-effort update check + auto-reload. Safe to call from anywhere
- *  (idempotent, debounced, never throws). Calling on app launch is
- *  the canonical use; you can also call on AppState=active transitions
- *  if you want to be aggressive. */
+/** Best-effort update check + auto-reload. Calls Expo's update SDK on
+ *  every invocation — Expo's internal cache + manifest hashing
+ *  dedupes redundant network calls; we don't need to add our own
+ *  debounce on top, and a debounce was preventing fast iteration
+ *  during testing.
+ *
+ *  Safe to call from anywhere (idempotent guard via inFlight, never
+ *  throws). Call on launch + on every AppState=active transition.
+ */
 export async function checkAndApplyUpdate(): Promise<void> {
-  // Disabled in development / Expo Go / dev-client (the metro bundle
-  // is the source of truth there).
   if (__DEV__) return;
-  // Some build profiles ship without updates enabled.
   if (!Updates.isEnabled) return;
-
-  const now = Date.now();
-  if (now - lastChecked < MIN_INTERVAL_MS) return;
-  lastChecked = now;
-
+  if (inFlight) return;
+  inFlight = true;
   try {
     const result = await Updates.checkForUpdateAsync();
     if (!result.isAvailable) return;
     await Updates.fetchUpdateAsync();
-    // Apply immediately — short "Updating..." flash then back in business.
     await Updates.reloadAsync();
   } catch (err: any) {
-    // Common: network failure, no update available, etc. We swallow —
-    // the user will pick it up on the next call.
     if (__DEV__) console.warn("[ota] check failed:", err?.message);
+  } finally {
+    inFlight = false;
   }
 }
