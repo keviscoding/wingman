@@ -396,18 +396,29 @@ async def _generate_for_user_messages(
     messages: list[Message],
     extra_context: str = "",
 ) -> tuple[list[dict], str, str, str, float]:
-    """Run the same tuned-v4 path the desktop uses, hedged 5-parallel.
+    """Fast path: tuned v4 Flash, hedged 5-parallel.
 
-    SaaS users always get the tuned v4 endpoint by default — that's our
-    quality moat. Returns (replies, read, advice, model_tag, cost_cents).
+    Returns (replies, read, advice, model_tag, cost_cents).
+
+    Gracefully falls back to Pro when:
+      - Vertex AI isn't configured (no service account on this host)
+      - Tuned generation returns nothing or errors
+
+    The fallback keeps users unblocked — they just get a slower / more
+    expensive generation behind the scenes. The mobile app still sees
+    a normal "ready" job.
     """
     from wingman.tuned_flash_client import (
         generate_tuned_replies_json, is_tuned_configured, get_active_version,
     )
 
     if not is_tuned_configured():
-        # Shouldn't happen in production. If it does, surface clearly.
-        return [], "", "", "tuned-not-configured", 0.0
+        # Vertex not wired on this deploy — fall back so users still
+        # get replies. Tag tells us in logs that this isn't ideal.
+        print("[saas-pipeline] tuned not configured, falling back to pro")
+        return await _generate_pro_for_user_messages(
+            ctx, messages, extra_context=extra_context,
+        )
 
     msg_dicts = [
         {"speaker": m.speaker, "text": m.text} for m in messages
