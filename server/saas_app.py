@@ -47,8 +47,54 @@ def _bootstrap_gcp_credentials() -> None:
         print(f"[saas] Failed to write GCP creds: {exc}")
 
 
+def _seed_persistent_account() -> None:
+    """Ensure a fixed Pro account exists after every container boot.
+
+    On DO Basic instances the SQLite DB lives on ephemeral disk — every
+    redeploy wipes user data. Until we migrate to managed Postgres, this
+    seeder lets the operator set WINGMAN_SEED_PRO_EMAIL and
+    WINGMAN_SEED_PRO_PASSWORD env vars; on startup we create-or-update
+    the account with those credentials and set it to Pro for a year.
+
+    Idempotent: safe to run on every boot. If the account already exists
+    we just refresh the password hash + extend the subscription.
+    """
+    email = (os.getenv("WINGMAN_SEED_PRO_EMAIL") or "").strip().lower()
+    password = (os.getenv("WINGMAN_SEED_PRO_PASSWORD") or "").strip()
+    if not email or not password:
+        return
+    try:
+        from wingman.saas import auth, db
+        import time as _time
+
+        existing = db.get_user_by_email(email)
+        pw_hash = auth.hash_password(password)
+        until = int(_time.time()) + 365 * 24 * 3600
+
+        if existing:
+            with db.connect() as conn:
+                conn.execute(
+                    "UPDATE users SET password_hash = ?, plan = 'pro', "
+                    "subscription_until = ? WHERE id = ?",
+                    (pw_hash, until, existing["id"]),
+                )
+            print(f"[seed] Refreshed Pro account: {email}")
+        else:
+            user = db.create_user(email, pw_hash, display_name="Pro")
+            with db.connect() as conn:
+                conn.execute(
+                    "UPDATE users SET plan = 'pro', subscription_until = ? "
+                    "WHERE id = ?",
+                    (until, user["id"]),
+                )
+            print(f"[seed] Created Pro account: {email}")
+    except Exception as exc:
+        print(f"[seed] Failed: {exc}")
+
+
 _bootstrap_gcp_credentials()
 _saas_db.init_db()
+_seed_persistent_account()
 
 app = FastAPI(
     title="Wingman SaaS",
