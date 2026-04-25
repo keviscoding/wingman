@@ -1,5 +1,34 @@
+# Don't bloat the image — keep build context small + skip dev junk
 .venv/
 __pycache__/
 *.pyc
+*.pyo
 .git/
 .DS_Store
+.cursor/
+.expo/
+
+# Local data — must NOT leak into the container, the volume mount
+# provides this at runtime.
+data/
+
+# Mobile sources don't belong in the server image
+mobile/
+WINGMAN UI/
+mockups/
+training/
+
+# Notebooks + dev scripts
+*.ipynb
+.ipynb_checkpoints/
+build/
+dist/
+*.egg-info/
+
+# Logs
+*.log
+/tmp/
+
+# Editor
+.idea/
+.vscode/

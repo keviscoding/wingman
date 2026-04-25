@@ -1,8 +1,55 @@
+# ── Python ──
 .venv/
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+
+# ── OS / editor ──
 .DS_Store
+.idea/
+.vscode/
+
+# ── Secrets ──
 .env
+mobile/.env
+*.pem
+*.key
+data/saas/.jwt_secret
+
+# ── Local user data (provisioned via DO persistent disk in prod) ──
+data/
 chats/
+case_studies/
+examples_library/
+training_dataset/
 training/
 presets.json
+global_settings.json
+wingman.log
+*.log
+
+# ── Tuning artifacts ──
+.master_playbook.json
+.examples_*.json
+.summary_*.json
+
+# ── Mobile (Expo / React Native) ──
+mobile/node_modules/
+mobile/.expo/
+mobile/dist/
+mobile/web-build/
+mobile/.expo-shared/
+mobile/ios/
+mobile/android/
+# Keep package-lock.json so EAS builds are reproducible.
+
+# ── Misc ──
+*.swp
+*.swo
+.cursor/
+
+# ── Design source (not needed by the deploy / EAS) ──
+WINGMAN UI/

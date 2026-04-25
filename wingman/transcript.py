@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass, field
 
 from thefuzz import fuzz
 
 _DEDUP_THRESHOLD = 78
-_MAX_MESSAGES = 500
+# Upper bound on in-memory conversation length. The summarizer compresses
+# older messages before they ever hit the Pro prompt, so this limit is
+# really just a safety rail against pathological growth. Override with
+# WINGMAN_MAX_MESSAGES in .env if you keep longer threads.
+try:
+    _MAX_MESSAGES = max(500, int(os.getenv("WINGMAN_MAX_MESSAGES", "5000")))
+except ValueError:
+    _MAX_MESSAGES = 5000
 
 
 @dataclass
@@ -18,6 +26,7 @@ class Message:
     text: str
     reply_to: str = ""
     timestamp: float = 0.0
+    time_label: str = ""  # human-readable from screenshot, e.g. "2:34 PM" or "Yesterday 6:12 PM"
 
     def __post_init__(self):
         if not self.timestamp:
@@ -27,6 +36,8 @@ class Message:
         d = {"speaker": self.speaker, "text": self.text}
         if self.reply_to:
             d["reply_to"] = self.reply_to
+        if self.time_label:
+            d["time"] = self.time_label
         return d
 
 
@@ -51,7 +62,8 @@ class ConversationState:
             if speaker not in ("me", "them"):
                 speaker = "them"
             reply_to = item.get("reply_to", "").strip()
-            incoming.append(Message(speaker=speaker, text=text, reply_to=reply_to))
+            time_label = item.get("time", "").strip()
+            incoming.append(Message(speaker=speaker, text=text, reply_to=reply_to, time_label=time_label))
 
         if not incoming:
             return 0
@@ -168,6 +180,40 @@ class ConversationState:
             if fuzz.ratio(clean, existing.text) >= _DEDUP_THRESHOLD:
                 return True
         return False
+
+    def time_context(self) -> str:
+        """Lightweight time context — just current time and who spoke last."""
+        from datetime import datetime
+
+        if not self.messages:
+            return ""
+
+        now = datetime.now()
+        last = self.messages[-1]
+
+        parts = [
+            f"Current date/time: {now.strftime('%A %B %d, %Y, %I:%M %p')}",
+            f"Last message was from: {'me' if last.speaker == 'me' else 'them'}",
+        ]
+
+        if last.time_label:
+            parts.append(f"Last message timestamp (from chat): {last.time_label}")
+
+        return "TIME CONTEXT:\n- " + "\n- ".join(parts)
+
+    @staticmethod
+    def _format_gap(seconds: float) -> str:
+        if seconds < 0:
+            return "just now"
+        if seconds < 60:
+            return f"{int(seconds)} seconds"
+        if seconds < 3600:
+            return f"{int(seconds / 60)} minutes"
+        if seconds < 86400:
+            h = seconds / 3600
+            return f"{h:.1f} hours" if h < 10 else f"{int(h)} hours"
+        days = seconds / 86400
+        return f"{days:.1f} days" if days < 7 else f"{int(days)} days"
 
     def _trim(self):
         if len(self.messages) > _MAX_MESSAGES:

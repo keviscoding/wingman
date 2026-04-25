@@ -87,8 +87,14 @@ select {
 /* ── Drop zone ───────────────────────────────────────────────────────── */
 
 .drop-zone {
-  margin: 4px 0; flex-shrink: 0;
+  margin: 4px 0; flex-shrink: 0; transition: all 0.2s;
 }
+.drop-zone.collapsed .drop-zone-inner {
+  min-height: 0; padding: 6px 12px; font-size: 10px;
+}
+.drop-zone.collapsed .drop-icon { font-size: 12px; }
+.drop-zone.collapsed .drop-preview { display: none; }
+.drop-zone.collapsed .drop-analyze-btn { display: none; }
 .drop-zone-inner {
   display: flex; align-items: center; justify-content: center; gap: 8px;
   padding: 12px; border-radius: var(--radius);
@@ -235,13 +241,20 @@ select {
 /* ── Contacts sidebar ────────────────────────────────────────────────── */
 
 .contacts-sidebar {
-  width: 140px; flex-shrink: 0; display: flex; flex-direction: column;
+  width: 200px; flex-shrink: 0; display: flex; flex-direction: column;
   overflow-y: auto;
 }
 .sidebar-header {
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 8px;
 }
+.sidebar-btns { display: flex; gap: 4px; }
+.sidebar-action-btn {
+  padding: 3px 6px; border-radius: 4px; border: 1px solid var(--border);
+  background: transparent; color: var(--dim); font-size: 9px; font-weight: 600;
+  cursor: pointer; transition: all 0.15s;
+}
+.sidebar-action-btn:hover { border-color: var(--green); color: var(--green); }
 .contacts-sidebar h3 {
   font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px;
   color: var(--dim);
@@ -253,28 +266,146 @@ select {
   transition: all 0.15s;
 }
 .new-chat-btn:hover { background: var(--accent); color: #fff; }
+.new-chat-dropdown { position: relative; }
+.new-chat-menu {
+  position: absolute; right: 0; top: 100%; margin-top: 4px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 8px; overflow: hidden; z-index: 20;
+  min-width: 160px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+.new-chat-menu.hidden { display: none; }
+.new-chat-option {
+  display: block; width: 100%; padding: 8px 12px; border: none;
+  background: transparent; color: var(--text); font-size: 11px;
+  cursor: pointer; text-align: left; font-family: inherit;
+}
+.new-chat-option:hover { background: var(--accent-glow); }
 .contacts-list {
   flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;
 }
+.contact-search {
+  width: 100%; padding: 6px 10px; border-radius: 6px; margin-bottom: 6px;
+  background: var(--surface); border: 1px solid var(--border);
+  color: var(--text); font-size: 11px; font-family: inherit; outline: none;
+}
+.contact-search:focus { border-color: var(--accent); }
+.contact-search::placeholder { color: var(--dim); }
 .contact-item {
   padding: 8px 10px; border-radius: 8px; font-size: 12px;
   cursor: pointer; color: var(--dim); transition: all 0.1s;
   border: 1px solid transparent;
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; flex-direction: column; gap: 2px;
+  position: relative;
 }
 .contact-item:hover { background: var(--surface); color: var(--text); }
 .contact-item.active { background: var(--accent-glow); color: var(--accent); border-color: var(--accent); }
 .empty-small { font-size: 11px; color: var(--dim); padding: 8px; }
+.contact-top { display: flex; align-items: center; gap: 6px; width: 100%; }
+.contact-recep-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+  opacity: 0.5;
+}
+.contact-recep-dot.cold { background: #5999e8; }
+.contact-recep-dot.warm { background: #f0a030; }
+.contact-recep-dot.hot { background: #e84393; }
 .contact-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-.contact-actions { display: flex; gap: 2px; opacity: 0; transition: opacity 0.1s; flex-shrink: 0; }
+.contact-time-ago { font-size: 10px; color: var(--dim); flex-shrink: 0; white-space: nowrap; opacity: 0.65; font-variant-numeric: tabular-nums; }
+.contact-bottom { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; margin-top: 2px; }
+.contact-bottom .contact-preview { flex: 1; min-width: 0; margin: 0; }
+.contact-preview {
+  font-size: 10px; color: var(--dim); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+  opacity: 0.7;
+}
+.lead-tag {
+  display: inline-block; font-size: 8px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.5px; padding: 1px 4px; border-radius: 3px; margin-left: 4px;
+}
+.lead-tag.hot { background: rgba(255,71,87,0.2); color: #ff4757; }
+.lead-tag.warm { background: rgba(240,160,48,0.2); color: #f0a030; }
+.lead-tag.cold { background: rgba(89,153,232,0.2); color: #5999e8; }
+.contact-actions { display: flex; gap: 2px; opacity: 0; transition: opacity 0.1s; flex-shrink: 0; margin-left: auto; }
 .contact-item:hover .contact-actions { opacity: 0.7; }
-.contact-rename, .contact-delete {
+.contact-rename, .contact-delete, .contact-flag {
   font-size: 10px; cursor: pointer; padding: 2px 3px;
 }
 .contact-rename { color: var(--dim); }
 .contact-rename:hover { color: var(--accent); }
 .contact-delete { color: var(--red); }
 .contact-delete:hover { opacity: 1; }
+/* Bad-outcome flag button. Neutral until flagged, then purple; pulses
+   while the post-mortem is being built in the background. */
+.contact-flag { color: var(--dim); }
+.contact-flag:hover { color: #b36bff; }
+.contact-flag.flagged { color: #b36bff; opacity: 1; }
+.contact-flag.flagged.ready { color: #b36bff; }
+.contact-flag.flagged.analyzing { animation: badge-pulse 1.2s ease-in-out infinite; }
+/* Keep the flag visible even when contact-actions is opacity:0 so the
+   user can see which chats are flagged at a glance. */
+.contact-item.bad-outcome .contact-actions { opacity: 0.7; }
+.contact-item.bad-outcome { border-color: rgba(144,68,232,0.35); }
+.bad-outcome-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  background: rgba(144,68,232,0.18);
+  color: #b36bff;
+  vertical-align: middle;
+}
+
+.contact-item.has-new-replies {
+  border-color: var(--green);
+  position: relative;
+}
+.contact-item.has-new-replies::after {
+  content: "NEW";
+  position: absolute;
+  top: 4px; right: 6px;
+  font-size: 7px; font-weight: 800; letter-spacing: 0.5px;
+  color: #fff; background: var(--red);
+  padding: 1px 4px; border-radius: 3px;
+  animation: badge-pulse 1.5s ease-in-out infinite;
+  z-index: 2;
+}
+@keyframes badge-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(1.2); }
+}
+
+/* ── Reply-ready toast notifications (top-right) ─────────────────────── */
+
+.reply-toasts {
+  position: fixed; top: 12px; right: 12px; z-index: 1000;
+  display: flex; flex-direction: column; gap: 8px;
+  pointer-events: none;
+}
+.reply-toast {
+  pointer-events: auto;
+  padding: 10px 14px; border-radius: 10px;
+  background: var(--surface-2); border: 1px solid var(--green);
+  color: var(--text); font-size: 12px; cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  animation: toast-in 0.3s ease-out;
+  display: flex; align-items: center; gap: 8px;
+  max-width: 260px;
+}
+.reply-toast:hover { border-color: var(--accent); }
+.reply-toast .toast-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--green); flex-shrink: 0;
+}
+.reply-toast .toast-text { flex: 1; }
+.reply-toast .toast-close {
+  color: var(--dim); font-size: 14px; cursor: pointer; padding: 0 2px;
+}
+.reply-toast .toast-close:hover { color: var(--text); }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
 
 /* ── Content area ────────────────────────────────────────────────────── */
 
@@ -293,6 +424,24 @@ select {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ── Receptiveness slider ─────────────────────────────────────────────── */
+
+.receptiveness-bar {
+  display: none; flex-shrink: 0; align-items: center; gap: 10px;
+  padding: 4px 0; margin-bottom: 4px;
+}
+.receptiveness-bar.visible { display: flex; }
+.receptiveness-label {
+  display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--dim);
+}
+.receptiveness-text { white-space: nowrap; min-width: 110px; font-weight: 600; }
+.receptiveness-bar input[type="range"] {
+  width: 140px; height: 4px; accent-color: var(--accent); cursor: pointer;
+}
+.receptiveness-desc {
+  font-size: 10px; color: var(--dim); white-space: nowrap;
 }
 
 /* ── Results: transcript left, replies right — FILLS all space ───────── */
@@ -478,20 +627,218 @@ section h2 {
 
 .extra-request-bar {
   margin-bottom: 8px; flex-shrink: 0;
+  display: flex; gap: 6px; align-items: stretch;
 }
 .extra-request-input {
-  width: 100%; padding: 8px 12px; border-radius: 8px;
+  flex: 1; padding: 8px 12px; border-radius: 8px;
   background: var(--surface-2); border: 1px solid var(--border);
   color: var(--text); font-size: 12px; font-family: inherit; outline: none;
+  min-width: 0;
 }
 .extra-request-input:focus { border-color: var(--accent); }
 .extra-request-input::placeholder { color: var(--dim); }
+.extra-request-input.locked {
+  background: var(--accent-glow, rgba(124, 92, 255, 0.08));
+  border-color: var(--accent);
+}
+.lock-extra-btn {
+  flex-shrink: 0;
+  padding: 0 10px;
+  background: var(--surface-2); color: var(--dim);
+  border: 1px solid var(--border); border-radius: 8px;
+  cursor: pointer; font-size: 13px; line-height: 1;
+  transition: all 0.1s;
+}
+.lock-extra-btn:hover { color: var(--text); border-color: var(--dim); }
+.lock-extra-btn.active {
+  background: var(--accent); color: #fff; border-color: var(--accent);
+}
+.lock-extra-btn.global-lock-btn.active {
+  /* Distinct color so user can tell per-chat vs global at a glance */
+  background: #f0a030; border-color: #f0a030;
+}
+.global-lock-badge {
+  margin: -4px 0 8px; padding: 6px 10px; border-radius: 8px;
+  background: rgba(240, 160, 48, 0.12);
+  border: 1px solid rgba(240, 160, 48, 0.4);
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11px; color: var(--text);
+}
+.global-lock-badge.hidden { display: none; }
+.global-lock-badge .glb-icon { flex-shrink: 0; font-size: 12px; }
+.global-lock-badge .glb-label {
+  flex-shrink: 0; color: #f0a030; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.3px;
+}
+.global-lock-badge .glb-text {
+  flex: 1; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+  opacity: 0.85;
+}
+.global-lock-badge .glb-unlock {
+  flex-shrink: 0;
+  background: transparent; border: none; cursor: pointer;
+  color: var(--dim); font-size: 16px; line-height: 1;
+  padding: 0 4px;
+}
+.global-lock-badge .glb-unlock:hover { color: #f0a030; }
 
 .replies-header {
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 8px; flex-shrink: 0;
 }
 .replies-header h2 { margin-bottom: 0; }
+.replies-header-right {
+  display: flex; align-items: center; gap: 8px;
+}
+
+.model-toggle {
+  display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+}
+.model-btn {
+  padding: 4px 10px; border: none; background: transparent;
+  color: var(--dim); font-size: 10px; font-weight: 600;
+  cursor: pointer; font-family: inherit; transition: all 0.15s;
+}
+.model-btn:hover { color: var(--text); }
+.model-btn.active {
+  background: var(--accent); color: #fff;
+}
+
+.training-toggle {
+  padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border);
+  background: transparent; color: var(--dim); font-size: 10px; font-weight: 600;
+  cursor: pointer; font-family: inherit; transition: all 0.15s;
+}
+.training-toggle:hover { border-color: var(--green); color: var(--green); }
+.training-toggle.active {
+  background: var(--green); color: #fff; border-color: var(--green);
+}
+/* KIE toggle uses a distinct orange so it's obvious when Pro is being
+   routed through an external proxy vs Google direct. */
+.kie-toggle:hover { border-color: #f0a030; color: #f0a030; }
+.kie-toggle.active {
+  background: #f0a030; color: #fff; border-color: #f0a030;
+}
+.kie-toggle.disabled {
+  opacity: 0.4; cursor: not-allowed;
+}
+/* Grok toggle — distinct cyan so xAI routing is visually obvious vs
+   Google direct (default), KIE (orange), and Training (green). */
+.grok-toggle-wrap { display: inline-flex; gap: 2px; align-items: stretch; }
+.grok-toggle:hover { border-color: #22d3ee; color: #22d3ee; }
+.grok-toggle.active {
+  background: #0891b2; color: #fff; border-color: #22d3ee;
+}
+.grok-toggle.disabled {
+  opacity: 0.4; cursor: not-allowed;
+}
+/* Mode badge (MA / R / NR) sits next to the Grok toggle. Hidden when
+   Grok is off — nothing to configure. When Grok is on and the mode is
+   "multi-agent", the badge glows slightly to flag Lucas is active. */
+.grok-mode-btn {
+  padding: 5px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  min-width: 32px;
+  display: none;
+  letter-spacing: 0.5px;
+}
+.grok-mode-btn.visible { display: inline-block; }
+.grok-mode-btn:hover { border-color: #22d3ee; color: #22d3ee; }
+.grok-mode-btn[data-mode="multi-agent"] {
+  background: rgba(8,145,178,0.18);
+  border-color: #22d3ee;
+  color: #22d3ee;
+}
+/* Full-training sub-button — only shown when Grok is on. Active state
+   signals all 121 transcripts are being sent (cached after call 1). */
+.grok-full-btn {
+  padding: 5px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  min-width: 34px;
+  display: none;
+  letter-spacing: 0.5px;
+}
+.grok-full-btn.visible { display: inline-block; }
+.grok-full-btn:hover { border-color: #22d3ee; color: #22d3ee; }
+.grok-full-btn.active {
+  background: #0891b2; color: #fff; border-color: #22d3ee;
+  box-shadow: 0 0 6px rgba(34,211,238,0.35);
+}
+/* Lessons toggle — distinct purple so the Case Study Library has its
+   own visual identity separate from Training (green) and KIE (orange). */
+.lessons-toggle:hover { border-color: #b36bff; color: #b36bff; }
+.lessons-toggle.active {
+  background: #9044e8; color: #fff; border-color: #9044e8;
+}
+.lessons-toggle.disabled {
+  opacity: 0.5; cursor: default;
+}
+
+/* Reply history mode badges next to "2 of 3" */
+.history-mode {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  vertical-align: middle;
+}
+.history-mode.on  { background: rgba(144,68,232,0.18); color: #b36bff; }
+.history-mode.off { background: rgba(128,128,128,0.18); color: var(--dim); }
+
+/* "📚 N lessons applied" pill in the Replies header. Shown only when
+   the CURRENTLY displayed generation pulled lessons from the Case
+   Study Library. Hover for the list of matched chats + similarity. */
+.lessons-applied {
+  display: inline-block;
+  margin-left: 10px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(144,68,232,0.15);
+  color: #b36bff;
+  border: 1px solid rgba(144,68,232,0.35);
+  cursor: help;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.lessons-applied.hidden { display: none; }
+.lessons-applied:hover { background: rgba(144,68,232,0.25); }
+
+/* Examples toggle — gold/amber to distinguish from purple lessons */
+.examples-toggle:hover { border-color: #eab308; color: #eab308; }
+.examples-toggle.active {
+  background: #ca8a04; color: #fff; border-color: #eab308;
+}
+.examples-toggle.building {
+  background: rgba(234,179,8,0.18);
+  border-color: #eab308; color: #eab308;
+  animation: badge-pulse 1.4s ease-in-out infinite;
+}
+
+/* "⭐ N examples applied" pill — gold variant of the lessons pill */
+.examples-applied {
+  display: inline-block;
+  margin-left: 10px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(234,179,8,0.15);
+  color: #eab308;
+  border: 1px solid rgba(234,179,8,0.35);
+  cursor: help;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.examples-applied.hidden { display: none; }
+.examples-applied:hover { background: rgba(234,179,8,0.25); }
 
 .regen-btn {
   padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border);
@@ -514,6 +861,22 @@ section h2 {
   border-radius: var(--radius); padding: 12px 14px; cursor: pointer;
   transition: all 0.15s; flex-shrink: 0;
 }
+.reply-history-nav {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  margin-bottom: 6px; flex-shrink: 0;
+}
+.reply-history-nav.hidden { display: none; }
+.history-btn {
+  width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--dim); font-size: 14px;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s;
+}
+.history-btn:hover { border-color: var(--accent); color: var(--accent); }
+.history-btn:disabled { opacity: 0.3; cursor: default; }
+.history-label { font-size: 11px; color: var(--dim); min-width: 50px; text-align: center; }
+
+.reply-card.streaming { border-color: var(--accent); border-style: dashed; opacity: 0.85; }
 .reply-card:hover { border-color: var(--accent); box-shadow: 0 0 12px var(--accent-glow); transform: translateY(-1px); }
 .reply-card:active { transform: scale(0.985); }
 .reply-card .label {
@@ -521,7 +884,7 @@ section h2 {
   text-transform: uppercase; letter-spacing: 1px; color: var(--accent);
   margin-bottom: 4px; padding: 2px 6px; background: var(--accent-glow); border-radius: 3px;
 }
-.reply-card .text { font-size: 13px; line-height: 1.5; }
+.reply-card .text { font-size: 14px; line-height: 1.5; }
 .reply-card .why {
   font-size: 11px; color: var(--green); margin-top: 5px;
   line-height: 1.45; font-style: italic;
@@ -531,6 +894,57 @@ section h2 {
   opacity: 0; transition: opacity 0.15s;
 }
 .reply-card:hover .hint { opacity: 1; }
+
+/* ── Rapid Fire modal ────────────────────────────────────────────────── */
+
+.rf-modal {
+  position: fixed; inset: 0; z-index: 500;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
+}
+.rf-modal.hidden { display: none; }
+.rf-modal-content {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 16px; padding: 24px; width: 360px; max-width: 90vw;
+  position: relative;
+}
+.rf-modal-content h3 {
+  font-size: 16px; color: var(--accent); margin-bottom: 12px;
+}
+.rf-section { margin-bottom: 12px; }
+.rf-section.hidden { display: none; }
+.rf-section p { font-size: 12px; color: var(--dim); line-height: 1.5; margin-bottom: 8px; }
+.rf-select {
+  width: 100%; padding: 8px 10px; border-radius: 8px;
+  background: var(--surface); border: 1px solid var(--border);
+  color: var(--text); font-size: 13px; margin-bottom: 10px;
+}
+.rf-btn {
+  width: 100%; padding: 10px; border-radius: 8px; border: none;
+  font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit;
+}
+.rf-start { background: var(--accent); color: #fff; }
+.rf-stop { background: var(--red); color: #fff; }
+.rf-generate { background: var(--green); color: #fff; }
+.rf-btn:hover { filter: brightness(1.1); }
+.rf-count { font-size: 14px; color: var(--text); }
+.rf-chat-list {
+  max-height: 200px; overflow-y: auto; margin-bottom: 10px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.rf-chat-item {
+  padding: 6px 10px; border-radius: 6px; background: var(--surface);
+  border: 1px solid var(--border); font-size: 12px; color: var(--text);
+  display: flex; justify-content: space-between;
+}
+.rf-chat-item .rf-msgs { color: var(--dim); }
+.rf-close {
+  position: absolute; top: 12px; right: 12px; background: none; border: none;
+  color: var(--dim); font-size: 20px; cursor: pointer;
+}
+.rf-close:hover { color: var(--text); }
+.rapid-fire-btn { border-color: var(--green); color: var(--green); }
+.rapid-fire-btn:hover { background: var(--green); color: #fff; }
 
 .toast {
   position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(20px);
@@ -566,4 +980,152 @@ section h2 {
   .reply-card .why { font-size: 13px; }
   .reply-card .hint { opacity: 1; }
   .coach-read, .coach-advice { font-size: 14px; }
+}
+
+/* ── Baseline system-prompt editor modal ───────────────────────── */
+.baseline-modal-content {
+  width: 720px; max-width: 92vw;
+  max-height: 90vh; display: flex; flex-direction: column;
+}
+.baseline-modal-content h3 { margin: 0 0 6px; }
+.baseline-desc {
+  margin: 0 0 12px; font-size: 12px; color: var(--dim); line-height: 1.5;
+}
+.baseline-desc code {
+  background: rgba(255,255,255,0.08); padding: 1px 6px; border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
+}
+.baseline-indicator {
+  font-size: 11px; padding: 6px 10px; border-radius: 6px; margin-bottom: 10px;
+  font-weight: 600;
+}
+.baseline-indicator.custom {
+  background: rgba(144,68,232,0.18); color: #b36bff;
+  border: 1px solid rgba(144,68,232,0.35);
+}
+.baseline-indicator.default {
+  background: rgba(128,128,128,0.12); color: var(--dim);
+  border: 1px solid var(--border);
+}
+.baseline-textarea {
+  flex: 1 1 auto; min-height: 260px; max-height: 52vh;
+  resize: vertical;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px; line-height: 1.55; letter-spacing: 0.1px;
+}
+.baseline-textarea:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(102,224,180,0.12);
+}
+.baseline-meta {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-top: 6px; font-size: 11px; color: var(--dim);
+}
+.baseline-link-btn {
+  background: none; border: none; color: var(--accent);
+  cursor: pointer; font-size: 11px; padding: 2px 4px;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.baseline-link-btn:hover { opacity: 0.8; }
+.baseline-original {
+  margin: 10px 0 0; padding: 10px 12px;
+  background: var(--surface); border: 1px dashed var(--border); border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+  line-height: 1.5; color: var(--dim);
+  white-space: pre-wrap; word-wrap: break-word;
+  max-height: 200px; overflow-y: auto;
+}
+.baseline-original.hidden { display: none; }
+.baseline-actions {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-top: 16px; gap: 10px;
+}
+.baseline-actions-right { display: flex; gap: 8px; }
+.baseline-cancel-btn {
+  background: var(--surface); color: var(--dim); border: 1px solid var(--border);
+}
+.baseline-cancel-btn:hover { color: var(--text); border-color: var(--dim); }
+/* Trigger button — subtle purple pulse when a custom override is set
+   so user always knows whether they're on factory or custom. */
+.baseline-btn.has-override {
+  background: rgba(144,68,232,0.15);
+  border-color: rgba(144,68,232,0.4);
+  color: #b36bff;
+}
+
+/* Tuned model button (3rd in the model toggle) */
+.model-btn[data-model="tuned"] {
+  /* Distinct teal when active so it's obvious which model is generating */
+}
+.model-btn[data-model="tuned"].active {
+  background: #0d9488; color: #fff; border-color: #0d9488;
+}
+.model-btn.disabled {
+  opacity: 0.4; cursor: not-allowed;
+}
+
+/* Tuned-version cycle button — appears only when Tuned model is active */
+.tuned-version-btn {
+  padding: 5px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  min-width: 28px;
+  display: none;
+  letter-spacing: 0.5px;
+  background: rgba(13,148,136,0.18);
+  border-color: #0d9488;
+  color: #0d9488;
+}
+.tuned-version-btn.visible { display: inline-block; }
+.tuned-version-btn:hover {
+  background: rgba(13,148,136,0.35);
+  color: #fff;
+}
+
+/* DeepSeek toggle — distinct indigo-purple to separate from Grok's cyan
+   and Training's green. Mode button (N / F) only visible when active. */
+.ds-toggle-wrap { display: inline-flex; gap: 2px; align-items: stretch; }
+.ds-toggle:hover { border-color: #7c3aed; color: #7c3aed; }
+.ds-toggle.active {
+  background: #5b21b6; color: #fff; border-color: #7c3aed;
+}
+.ds-toggle.disabled { opacity: 0.4; cursor: not-allowed; }
+.ds-mode-btn {
+  padding: 5px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  min-width: 24px;
+  display: none;
+  letter-spacing: 0.5px;
+}
+.ds-mode-btn.visible { display: inline-block; }
+.ds-mode-btn:hover { border-color: #7c3aed; color: #7c3aed; }
+.ds-mode-btn[data-mode="full"] {
+  background: rgba(124,58,237,0.28);
+  border-color: #7c3aed; color: #fff;
+  box-shadow: 0 0 6px rgba(124,58,237,0.4);
+}
+
+/* DeepSeek variant button (Pro / Flash). Only visible when DS is on. */
+.ds-variant-btn {
+  padding: 5px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  min-width: 32px;
+  display: none;
+  letter-spacing: 0.5px;
+}
+.ds-variant-btn.visible { display: inline-block; }
+.ds-variant-btn:hover { border-color: #7c3aed; color: #7c3aed; }
+.ds-variant-btn[data-variant="flash"] {
+  background: rgba(245,158,11,0.20);
+  border-color: #f59e0b;
+  color: #f59e0b;
+}
+.ds-variant-btn[data-variant="pro"] {
+  background: rgba(124,58,237,0.15);
+  border-color: #7c3aed;
+  color: #7c3aed;
 }

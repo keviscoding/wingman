@@ -24,6 +24,23 @@ class PresetStore:
             except Exception:
                 self._presets = []
 
+    def refresh(self) -> None:
+        """Re-read presets.json from disk. Safe to call on every /api/state
+        build: cheap (one file read), idempotent, and if the disk file is
+        missing/corrupt we keep the current in-memory list rather than
+        wiping it. Needed because the in-memory list can drift from disk
+        (multi-process writes, import/replace operations, external edits)
+        and the UI was showing the stale copy."""
+        if not PRESETS_FILE.exists():
+            return
+        try:
+            data = json.loads(PRESETS_FILE.read_text())
+            if isinstance(data, list):
+                self._presets = data
+        except Exception:
+            # Leave in-memory state alone on parse errors.
+            pass
+
     def _save(self):
         PRESETS_FILE.write_text(json.dumps(self._presets, indent=2))
 

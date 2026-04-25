@@ -1,0 +1,102 @@
+// Auth state held in a tiny context. Token persisted to SecureStore so
+// the user stays logged in across app restarts.
+
+import * as SecureStore from "expo-secure-store";
+import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
+import { api, AuthResponse, Me } from "./api";
+
+type AuthState = {
+  loading: boolean;        // true while we hydrate the persisted token
+  token: string | null;
+  me: Me | null;
+  signIn: (email: string, password: string) => Promise<void>;
+  signUp: (email: string, password: string, displayName?: string) => Promise<void>;
+  signOut: () => Promise<void>;
+  refreshMe: () => Promise<void>;
+};
+
+const TOKEN_KEY = "wingman.auth.token";
+
+const AuthContext = createContext<AuthState | null>(null);
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const [loading, setLoading] = useState(true);
+  const [token, setToken] = useState<string | null>(null);
+  const [me, setMe] = useState<Me | null>(null);
+
+  const persist = useCallback(async (t: string | null) => {
+    if (t) {
+      await SecureStore.setItemAsync(TOKEN_KEY, t);
+    } else {
+      await SecureStore.deleteItemAsync(TOKEN_KEY);
+    }
+  }, []);
+
+  const loadMe = useCallback(async (t: string) => {
+    try {
+      const m = await api.me(t);
+      setMe(m);
+    } catch {
+      // Token rejected — wipe so we go back to login
+      await persist(null);
+      setToken(null);
+      setMe(null);
+    }
+  }, [persist]);
+
+  // Hydrate on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const stored = await SecureStore.getItemAsync(TOKEN_KEY);
+        if (stored) {
+          setToken(stored);
+          await loadMe(stored);
+        }
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [loadMe]);
+
+  const signIn = useCallback(async (email: string, password: string) => {
+    const r: AuthResponse = await api.login(email, password);
+    setToken(r.token);
+    await persist(r.token);
+    await loadMe(r.token);
+  }, [persist, loadMe]);
+
+  const signUp = useCallback(
+    async (email: string, password: string, displayName?: string) => {
+      const r: AuthResponse = await api.signup(email, password, displayName);
+      setToken(r.token);
+      await persist(r.token);
+      await loadMe(r.token);
+    },
+    [persist, loadMe],
+  );
+
+  const signOut = useCallback(async () => {
+    await persist(null);
+    setToken(null);
+    setMe(null);
+  }, [persist]);
+
+  const refreshMe = useCallback(async () => {
+    if (token) await loadMe(token);
+  }, [token, loadMe]);
+
+  return (
+    <AuthContext.Provider
+      value={{ loading, token, me, signIn, signUp, signOut, refreshMe }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export function useAuth(): AuthState {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error("useAuth must be used inside <AuthProvider>");
+  return ctx;
+}

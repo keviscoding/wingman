@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Wingman">
   <meta name="theme-color" content="#0a0a0f">
-  <link rel="stylesheet" href="/static/style.css?v=46">
+  <link rel="stylesheet" href="/static/style.css?v=75">
 </head>
 <body>
   <div id="app">
@@ -86,13 +86,24 @@
       <aside class="contacts-sidebar" id="contactsSidebar">
         <div class="sidebar-header">
           <h3>Saved Chats</h3>
-          <button class="new-chat-btn" id="newChatBtn" title="New chat">+ New</button>
+          <div class="sidebar-btns">
+            <button class="sidebar-action-btn" id="rankLeadsBtn" title="Auto-rank all leads (Flash)">Rank</button>
+            <button class="sidebar-action-btn rapid-fire-btn" id="rapidFireBtn" title="Rapid Fire: capture multiple chats">Rapid</button>
+            <div class="new-chat-dropdown">
+              <button class="new-chat-btn" id="newChatBtn" title="New chat">+ New</button>
+              <div class="new-chat-menu hidden" id="newChatMenu">
+                <button class="new-chat-option" id="newChatManual">Manual (type name)</button>
+                <button class="new-chat-option" id="newChatScreenshot">Screenshot (auto-detect)</button>
+              </div>
+            </div>
+          </div>
         </div>
         <div class="contact-select-wrap">
           <select id="contactSelect" aria-label="Saved chats">
             <option value="">Chats…</option>
           </select>
         </div>
+        <input type="text" id="contactSearch" class="contact-search" placeholder="Search chats..." autocomplete="off">
         <div id="contactsList" class="contacts-list">
           <p class="empty-small">No chats yet</p>
         </div>
@@ -104,6 +115,13 @@
         </div>
 
         <div class="contact-label" id="contactLabel"></div>
+        <div class="receptiveness-bar" id="receptivenessBar">
+          <label class="receptiveness-label">
+            <span class="receptiveness-text" id="receptivenessText">Receptiveness: 5</span>
+            <input type="range" id="receptivenessSlider" min="0" max="10" value="5" step="1">
+          </label>
+          <span class="receptiveness-desc" id="receptivenessDesc"></span>
+        </div>
 
         <main id="results" class="results hidden">
           <section class="transcript-panel">
@@ -112,9 +130,10 @@
               <div class="add-dropdown" id="addDropdown">
                 <button class="append-btn" id="addToggle">+ Add new</button>
                 <div class="add-menu hidden" id="addMenu">
-                  <button class="add-option" id="addReadScreen">&#128065; Read screen</button>
+                  <button class="add-option" id="addReadScreen">&#128065; Read screen (scroll)</button>
+                  <button class="add-option" id="addQuickCapture">&#9889; Quick capture</button>
                   <label class="add-option" id="addScreenshot">
-                    &#128247; Screenshot
+                    &#128247; Upload file
                     <input type="file" id="addScreenshotInput" multiple accept="image/*,video/*" hidden>
                   </label>
                 </div>
@@ -135,6 +154,9 @@
               </select>
               </div>
               <button type="button" class="preset-add-btn" id="addPresetBtn" title="Save a new goal preset">+ New goal</button>
+              <button type="button" class="preset-io-btn" id="deletePresetBtn" title="Delete the currently selected goal">Delete</button>
+              <button type="button" class="preset-io-btn" id="setDefaultPresetBtn" title="Set current goal as default for new chats">Set default</button>
+              <button type="button" class="preset-io-btn baseline-btn" id="editBaselineBtn" title="Edit the baseline (No goal) behavior — the system prompt used when no goal is selected">&#9881; Baseline</button>
               <button type="button" class="preset-io-btn" id="exportPresetsBtn"
                 title="Download wingman-bundle.json: goals, training transcripts, and saved chats">Export</button>
               <label class="preset-io-btn preset-io-label" title="Restore from wingman-bundle.json (or goals-only JSON)">
@@ -145,10 +167,42 @@
             <div class="extra-request-bar">
               <input type="text" id="extraRequestInput" class="extra-request-input"
                      placeholder="Extra request for next replies (optional)..." autocomplete="off">
+              <button type="button" id="lockExtraBtn" class="lock-extra-btn"
+                      title="Lock this extra context to THIS chat so every generation uses it">&#128275;</button>
+              <button type="button" id="globalLockBtn" class="lock-extra-btn global-lock-btn"
+                      title="Lock this extra context to ALL chats (existing and new)">&#127760;</button>
             </div>
+            <div id="globalLockBadge" class="global-lock-badge hidden"></div>
             <div class="replies-header">
-              <h2>Replies</h2>
-              <button class="regen-btn" id="regenBtn" title="Generate new replies">&#8635; New replies</button>
+              <h2>Replies <span id="examplesApplied" class="examples-applied hidden" title=""></span><span id="lessonsApplied" class="lessons-applied hidden" title=""></span></h2>
+              <div class="replies-header-right">
+                <div class="model-toggle" id="modelToggle">
+                  <button class="model-btn active" data-model="pro">Pro</button>
+                  <button class="model-btn" data-model="flash">Flash</button>
+                  <button class="model-btn" data-model="tuned" title="Your fine-tuned Gemini 2.5 Flash — trained on Pro's outputs for your specific use case. Fast + personalized.">Tuned</button>
+                  <button class="model-btn tuned-version-btn" id="tunedVersionBtn" title="Click to cycle v1 / v2 / v3. Only relevant when Tuned is active.">v3</button>
+                </div>
+                <button class="training-toggle" id="trainingToggle" title="Include 121 training transcripts (slower but more informed)">Training</button>
+                <button class="training-toggle kie-toggle" id="kieToggle" title="Route Pro through KIE AI proxy (optional — off by default, Google direct is usually faster)">KIE</button>
+                <button class="training-toggle lessons-toggle" id="lessonsToggle" title="Inject lessons from chats you flagged as bad outcomes. Off disables for A/B testing.">Lessons</button>
+                <button class="training-toggle examples-toggle" id="examplesToggle" title="Inject your own past replies from similar situations as few-shot examples. Bootstrapped from all chats NOT flagged as bad outcomes.">Examples</button>
+                <div class="grok-toggle-wrap">
+                  <button class="training-toggle grok-toggle" id="grokToggle" title="Route Pro through xAI Grok 4.20 Multi-Agent (Lucas creative agent active). Off = Google direct.">Grok</button>
+                  <button class="training-toggle grok-mode-btn" id="grokModeBtn" title="Click to cycle Grok mode: multi-agent (Lucas) → reasoning → non-reasoning">MA</button>
+                  <button class="training-toggle grok-full-btn" id="grokFullBtn" title="FULL training mode — sends all 121 transcripts (~610k tokens) as cached prefix every call. First call pays ~$1.22 + ~60s, every call after is cached at $0.12.">Full</button>
+                </div>
+                <div class="ds-toggle-wrap">
+                  <button class="training-toggle ds-toggle" id="dsToggle" title="Route Pro through DeepSeek V4 via Atlas Cloud. Fast, strong reasoning.">DS</button>
+                  <button class="training-toggle ds-variant-btn" id="dsVariantBtn" title="Click to toggle: Pro (deeper reasoning) ↔ Flash (faster)">Pro</button>
+                  <button class="training-toggle ds-mode-btn" id="dsModeBtn" title="Click to toggle: normal (playbook only) ↔ full (entire training corpus as cached prefix)">N</button>
+                </div>
+                <button class="regen-btn" id="regenBtn" title="Generate new replies">&#8635; New replies</button>
+              </div>
+            </div>
+            <div class="reply-history-nav hidden" id="replyHistoryNav">
+              <button class="history-btn" id="historyPrev" title="Previous generation">&larr;</button>
+              <span class="history-label" id="historyLabel">1 of 1</span>
+              <button class="history-btn" id="historyNext" title="Next generation">&rarr;</button>
             </div>
             <div id="replies" class="replies-grid"></div>
           </section>
@@ -157,7 +211,65 @@
     </div>
 
     <div id="toast" class="toast">Copied!</div>
+    <div id="replyToasts" class="reply-toasts"></div>
+
+    <!-- Baseline system-prompt editor -->
+    <div id="baselineModal" class="rf-modal hidden" role="dialog" aria-labelledby="baselineTitle">
+      <div class="rf-modal-content baseline-modal-content">
+        <h3 id="baselineTitle">Edit baseline behavior</h3>
+        <p class="baseline-desc">
+          This is the system prompt used on every reply generation &mdash; including when "No goal" is selected.
+          Tweak the <em>semantics</em> (tone, emphasis, personality) freely. Keep the
+          <code>Format as JSON</code> template intact so reply parsing doesn't break.
+        </p>
+        <div class="baseline-indicator" id="baselineIndicator"></div>
+        <textarea id="baselineTextarea" class="baseline-textarea" spellcheck="false"
+          placeholder="Loading current baseline..."></textarea>
+        <div class="baseline-meta">
+          <span id="baselineCharCount">0 chars</span>
+          <button type="button" class="baseline-link-btn" id="baselineShowOriginal" title="Show the factory default so you can copy from it">Show factory default</button>
+        </div>
+        <pre class="baseline-original hidden" id="baselineOriginal"></pre>
+        <div class="baseline-actions">
+          <button type="button" class="rf-btn rf-stop" id="baselineResetBtn"
+            title="Restore the factory baseline — discards your custom edits.">Reset to Original</button>
+          <div class="baseline-actions-right">
+            <button type="button" class="rf-btn baseline-cancel-btn" id="baselineCancelBtn">Cancel</button>
+            <button type="button" class="rf-btn rf-generate" id="baselineSaveBtn">Save</button>
+          </div>
+        </div>
+        <button class="rf-close" id="baselineCloseBtn" aria-label="Close">&times;</button>
+      </div>
+    </div>
+    <div id="rapidFireModal" class="rf-modal hidden">
+      <div class="rf-modal-content">
+        <h3 id="rfTitle">Rapid Fire</h3>
+        <div id="rfSetup" class="rf-section">
+          <p>Choose platform, then click Start. Click through your chats — I'll detect each one.</p>
+          <select id="rfPlatform" class="rf-select">
+            <option value="">Any platform</option>
+            <option value="tinder">Tinder</option>
+            <option value="hinge">Hinge</option>
+            <option value="whatsapp">WhatsApp</option>
+            <option value="instagram">Instagram</option>
+            <option value="imessage">iMessage</option>
+          </select>
+          <button class="rf-btn rf-start" id="rfStart">Start Capturing</button>
+        </div>
+        <div id="rfCapturing" class="rf-section hidden">
+          <p>Recording your screen... click through your chats now!</p>
+          <p class="rf-count">Recording: <strong id="rfDetectedCount">0s</strong></p>
+          <button class="rf-btn rf-stop" id="rfStop">Stop &amp; Analyze</button>
+        </div>
+        <div id="rfReview" class="rf-section hidden">
+          <p>Detected chats:</p>
+          <div id="rfChatList" class="rf-chat-list"></div>
+          <button class="rf-btn rf-generate" id="rfGenerate">Generate All Replies</button>
+        </div>
+        <button class="rf-close" id="rfClose">&times;</button>
+      </div>
+    </div>
   </div>
-  <script src="/static/app.js?v=57"></script>
+  <script src="/static/app.js?v=99"></script>
 </body>
 </html>

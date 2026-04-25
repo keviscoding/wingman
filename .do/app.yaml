@@ -1,14 +1,116 @@
+# DigitalOcean App Platform spec — Wingman SaaS API.
+#
+# Single Python service running the FastAPI server in SaaS mode, behind
+# a persistent volume so chats + the SQLite users DB survive deploys.
+#
+# Deploy:
+#   1. Push this repo to GitHub
+#   2. doctl apps create --spec .do/app.yaml
+#   (or in the DO web console: Create App → from GitHub → import this spec)
+#
+# Update:
+#   doctl apps update <APP_ID> --spec .do/app.yaml
+#
+# Custom domain:
+#   doctl apps domain create <APP_ID> --domain api.yourdomain.com
+
 name: wingman
+region: nyc
+
 services:
-  - name: wingman
+  - name: api
+    # Build from this repo's Dockerfile. The github block below tells
+    # DO to redeploy automatically on every push to main.
     dockerfile_path: Dockerfile
-    http_port: 8000
-    instance_count: 1
+    source_dir: /
+    github:
+      branch: main
+      deploy_on_push: true
+      # repo: filled in via the DO web console at first deploy
+
+    # basic-xxs is plenty for the API (it's mostly waiting on Gemini).
+    # Bump to basic-xs ($12/mo) if you start seeing CPU saturation.
     instance_size_slug: basic-xxs
-    envs:
-      - key: WINGMAN_HEADLESS
-        value: "1"
-      - key: GEMINI_API_KEY
-        type: SECRET
+    instance_count: 1
+    http_port: 8000
+
+    health_check:
+      http_path: /api/state
+      initial_delay_seconds: 10
+      period_seconds: 30
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 3
+
     routes:
       - path: /
+
+    envs:
+      # ── Mode flags ──
+      - key: WINGMAN_MODE
+        scope: RUN_TIME
+        value: "saas"
+      - key: WINGMAN_HEADLESS
+        scope: RUN_TIME
+        value: "1"
+
+      # ── Auth ──
+      # Generate ONCE with: openssl rand -base64 48
+      # Set in DO console as encrypted; keep it stable so JWTs don't
+      # all invalidate when you redeploy.
+      - key: WINGMAN_JWT_SECRET
+        scope: RUN_TIME
+        type: SECRET
+
+      # ── Gemini keys (rotation) ──
+      # Comma-separated list. The server rotates on 429 / quota-exhausted.
+      - key: GEMINI_API_KEYS
+        scope: RUN_TIME
+        type: SECRET
+
+      # ── Tuned Flash endpoints (Vertex AI) ──
+      # All optional — set whichever versions you've fine-tuned.
+      - key: TUNED_VERSION
+        scope: RUN_TIME
+        value: "v4"
+      - key: TUNED_V1_ENDPOINT
+        scope: RUN_TIME
+        type: SECRET
+      - key: TUNED_V2_ENDPOINT
+        scope: RUN_TIME
+        type: SECRET
+      - key: TUNED_V3_ENDPOINT
+        scope: RUN_TIME
+        type: SECRET
+      - key: TUNED_V4_ENDPOINT
+        scope: RUN_TIME
+        type: SECRET
+
+      # ── Optional providers ──
+      - key: ATLASCLOUD_API_KEY  # DeepSeek via Atlas Cloud
+        scope: RUN_TIME
+        type: SECRET
+      - key: KIE_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: XAI_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+
+# Persistent volume — keeps user data across deploys and restarts.
+# Mounted at /app/data (where the SQLite + chat JSONs live).
+# 5 GB = $0.50/mo, more than enough for thousands of users.
+ingress:
+  rules:
+    - component:
+        name: api
+      match:
+        path:
+          prefix: /
+
+# Persistent disk attached to the api service.
+# (App Platform calls this the "disk" entry on the component.)
+# We declare it as a service-level mount in the body above is not yet
+# supported via app spec — set this in the DO console after first
+# deploy: Components → api → Resources → Add Disk → 5 GB → mount path
+# /app/data.

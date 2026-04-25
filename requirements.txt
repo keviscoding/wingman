@@ -13,3 +13,4 @@ pyobjc-framework-Quartz>=10.0
 thefuzz>=0.22.0
 python-Levenshtein>=0.26.0
 python-multipart>=0.0.18
+pynput>=1.7.7

@@ -312,6 +312,19 @@ html.headless-mobile .replies-header h2 {
   font-size: 13px;
 }
 
+html.headless-mobile .replies-header-right {
+  gap: 8px;
+}
+
+html.headless-mobile .model-btn {
+  padding: 8px 14px;
+  font-size: 13px;
+}
+
+html.headless-mobile .model-toggle {
+  border-radius: 10px;
+}
+
 html.headless-mobile .regen-btn {
   font-size: 13px;
   padding: 10px 14px;

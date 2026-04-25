@@ -15,7 +15,7 @@ from pathlib import Path
 from google import genai
 from google.genai import types
 
-from wingman.config import GEMINI_API_KEY, PRO_MODEL
+from wingman.config import PRO_MODEL, FLASH_MODEL, make_genai_client
 
 TRAINING_DIR = Path(__file__).parent.parent / "training"
 CACHE_TTL = "3600s"  # 1 hour
@@ -35,7 +35,9 @@ TRAINING_SYSTEM_INSTRUCTION = (
 class TrainingCache:
     """Manages loading training files and creating/refreshing the Gemini cache."""
 
-    def __init__(self):
+    def __init__(self, model: str = PRO_MODEL, label: str = "pro"):
+        self._model = model
+        self._label = label
         self._client: genai.Client | None = None
         self._cache_name: str | None = None
         self._file_hash: str | None = None
@@ -62,9 +64,7 @@ class TrainingCache:
 
     def _get_client(self) -> genai.Client:
         if self._client is None:
-            if not GEMINI_API_KEY:
-                raise RuntimeError("GEMINI_API_KEY not set")
-            self._client = genai.Client(api_key=GEMINI_API_KEY)
+            self._client = make_genai_client()
         return self._client
 
     def _list_training_files(self) -> list[Path]:
@@ -131,9 +131,9 @@ class TrainingCache:
         try:
             client = self._get_client()
             cache = client.caches.create(
-                model=PRO_MODEL,
+                model=self._model,
                 config=types.CreateCachedContentConfig(
-                    display_name="wingman-training",
+                    display_name=f"wingman-training-{self._label}",
                     system_instruction=TRAINING_SYSTEM_INSTRUCTION,
                     contents=[types.Content(
                         role="user",
@@ -148,7 +148,7 @@ class TrainingCache:
             self._token_count = cache.usage_metadata.total_token_count or 0
             self._created_at = time.time()
             self.status = "loaded"
-            print(f"[training] Cache created: {self._token_count:,} tokens, "
+            print(f"[training:{self._label}] Cache created: {self._token_count:,} tokens, "
                   f"{self._loaded_files} files, TTL {CACHE_TTL}")
             return True
 
@@ -161,6 +161,9 @@ class TrainingCache:
         """Re-create the cache if it's expired or about to expire (50 min)."""
         if not self._cache_name:
             return self.load()
+        if self._created_at <= 0:
+            self._created_at = time.time()
+            return True
         elapsed = time.time() - self._created_at
         if elapsed > 2700:
             print(f"[training] Cache age {int(elapsed)}s — refreshing before expiry...")

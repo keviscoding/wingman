@@ -16,11 +16,11 @@ from google import genai
 from google.genai import types
 
 from wingman.config import (
-    GEMINI_API_KEY,
     LIVE_MODEL,
     AUDIO_CHANNELS,
     AUDIO_CHUNK,
     AUDIO_SEND_RATE,
+    make_genai_client,
 )
 
 VOICE_COMMAND_DECL = {
@@ -113,9 +113,7 @@ class LiveSession:
         )
 
         self._running = True
-        if not GEMINI_API_KEY:
-            raise RuntimeError("GEMINI_API_KEY not set")
-        self._client = genai.Client(api_key=GEMINI_API_KEY)
+        self._client = make_genai_client()
 
         async with (
             self._client.aio.live.connect(model=LIVE_MODEL, config=config) as session,

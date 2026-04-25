@@ -16,10 +16,10 @@ from google import genai
 from google.genai import types
 
 from wingman.config import (
-    GEMINI_API_KEY,
     FLASH_MODEL,
     CHAT_READER_PROMPT,
     CHAT_READER_BATCH_PROMPT,
+    make_genai_client,
 )
 
 
@@ -39,12 +39,7 @@ class ChatReader:
 
     def _get_client(self) -> genai.Client:
         if self._client is None:
-            if not GEMINI_API_KEY:
-                raise RuntimeError("GEMINI_API_KEY not set — add it to .env")
-            self._client = genai.Client(
-                api_key=GEMINI_API_KEY,
-                http_options={"api_version": "v1beta"},
-            )
+            self._client = make_genai_client()
         return self._client
 
     @property
