@@ -164,6 +164,29 @@ async def register_push_token(
     return {"ok": True}
 
 
+@router.post("/me/test-push")
+async def test_push(user: Annotated[dict, Depends(current_user)]):
+    """Diagnostic — fires a notification immediately to the user's
+    last-registered Expo push token. Use this to verify the push
+    pipeline (token registration → Expo Push API → device) works
+    independently of any generation.
+    """
+    token = db.get_push_token(user["id"])
+    if not token:
+        raise HTTPException(
+            status_code=400,
+            detail="no_push_token_registered",
+        )
+    from .push import send_expo_push
+    await send_expo_push(
+        token,
+        title="Wingman test ✓",
+        body="If you see this, push notifications work.",
+        data={"test": True},
+    )
+    return {"ok": True, "token_prefix": token[:30]}
+
+
 @router.get("/me", response_model=MeResponse)
 async def me(user: Annotated[dict, Depends(current_user)]):
     q = db.get_user_quota_state(user["id"])
@@ -203,17 +226,29 @@ class QuickCaptureResponse(BaseModel):
     model: str
 
 
-@router.post("/quick-capture", response_model=QuickCaptureResponse)
+class QueuedJobResponse(BaseModel):
+    job_id: str
+    status: str = "queued"
+
+
+@router.post("/quick-capture", response_model=QueuedJobResponse, status_code=202)
 async def quick_capture(
     user: Annotated[dict, Depends(current_user)],
     screenshot: UploadFile = File(...),
     extra_context: str = Form(default=""),
     mode: str = Form(default="fast"),
 ):
-    """Upload a screenshot; receive 5 replies in one HTTP roundtrip.
+    """Async quick-capture: returns immediately (~1-3s) with a job_id.
 
-    `mode` is "fast" (tuned Flash) or "pro" (Gemini 3.1 Pro). Pro is
-    paid-only with a small lifetime trial gate for free users.
+    The slow work — Flash extraction, reply generation, push delivery —
+    happens in a background asyncio task. The mobile client either
+    polls `/jobs/{id}` or just waits for the system push notification
+    (or both).
+
+    This is the architectural fix that makes background-and-come-back
+    work: the upload completes BEFORE Android suspends JS, so the
+    server always knows the user wanted a generation. From there
+    everything is server-driven.
     """
     if mode not in ("fast", "pro"):
         mode = "fast"
@@ -223,57 +258,143 @@ async def quick_capture(
         raise HTTPException(status_code=402, detail=reason)
 
     img_bytes = await screenshot.read()
-    if len(img_bytes) > 10 * 1024 * 1024:  # 10 MB cap
+    if len(img_bytes) > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="image_too_large")
 
     ctx = get_context(user["id"], plan=user.get("plan", "free"))
 
+    import secrets
+    job_id = secrets.token_urlsafe(16)
+    db.create_job(job_id, user["id"], mode=mode)
+
+    # Kick the actual generation onto a background task. We deliberately
+    # don't await it — the client gets the job_id back in <1s.
+    asyncio.create_task(
+        _process_job(
+            job_id=job_id,
+            user_id=user["id"],
+            ctx=ctx,
+            img_bytes=img_bytes,
+            extra_context=extra_context,
+            mode=mode,
+        )
+    )
+
+    return QueuedJobResponse(job_id=job_id)
+
+
+async def _process_job(
+    *,
+    job_id: str,
+    user_id: str,
+    ctx,
+    img_bytes: bytes,
+    extra_context: str,
+    mode: str,
+) -> None:
+    """Background worker — runs generation, updates DB, fires push.
+    Never raises (all exceptions land in the job's error_detail)."""
+    import json as _json
     from .pipeline import quick_capture_for_user
+
+    db.update_job(job_id, status="running")
     try:
         result = await quick_capture_for_user(
             ctx, img_bytes, extra_context=extra_context, mode=mode,
         )
+        if not result.get("replies"):
+            db.update_job(job_id, status="error", error_detail="no_replies_produced")
+            return
+
+        db.record_generation(
+            user_id=user_id,
+            model=result.get("model", "unknown"),
+            cost_cents=result.get("cost_cents", 0),
+            reply_count=len(result["replies"]),
+            mode=mode,
+        )
+
+        payload = {
+            "job_id": job_id,
+            "chat_id": result["chat_id"],
+            "contact": result["contact"],
+            "transcript": result["transcript"],
+            "replies": result["replies"],
+            "read": result.get("read", ""),
+            "advice": result.get("advice", ""),
+            "generated_at": int(time.time()),
+            "model": result.get("model", "tuned-v4"),
+        }
+        db.update_job(
+            job_id,
+            status="ready",
+            contact=result["contact"],
+            chat_id=result["chat_id"],
+            result_json=_json.dumps(payload, ensure_ascii=False),
+        )
+
+        # Push — independent of whether the client is still listening.
+        push_token = db.get_push_token(user_id)
+        if push_token:
+            from .push import send_expo_push
+            await send_expo_push(
+                push_token,
+                title="Your reply is ready ✓",
+                body=f"5 replies for {result.get('contact', 'your chat')} · tap to copy",
+                data={
+                    "job_id": job_id,
+                    "chat_id": result["chat_id"],
+                    "contact": result.get("contact"),
+                },
+            )
     except Exception as exc:
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail="generation_failed") from exc
-
-    if not result.get("replies"):
-        raise HTTPException(status_code=502, detail="no_replies_produced")
-
-    db.record_generation(
-        user_id=user["id"],
-        model=result.get("model", "unknown"),
-        cost_cents=result.get("cost_cents", 0),
-        reply_count=len(result["replies"]),
-        mode=mode,
-    )
-
-    # Fire-and-forget push so users see "Replies ready" even if the
-    # app was backgrounded. Token may be missing on first launch
-    # (mobile registers asynchronously) — that's fine, no-op then.
-    push_token = db.get_push_token(user["id"])
-    if push_token:
-        from .push import fire_and_forget
-        fire_and_forget(
-            push_token,
-            title="Your reply is ready ✓",
-            body=f"5 replies for {result.get('contact', 'your chat')} · tap to copy",
-            data={
-                "chat_id": result["chat_id"],
-                "contact": result.get("contact"),
-            },
+        db.update_job(
+            job_id,
+            status="error",
+            error_detail=str(exc)[:500],
         )
 
-    return QuickCaptureResponse(
-        chat_id=result["chat_id"],
-        contact=result["contact"],
-        transcript=result["transcript"],
-        replies=[ReplyOption(**r) for r in result["replies"]],
-        read=result.get("read", ""),
-        advice=result.get("advice", ""),
-        generated_at=int(time.time()),
-        model=result.get("model", "tuned-v4"),
+
+class JobStatusResponse(BaseModel):
+    job_id: str
+    status: str
+    mode: str | None = None
+    contact: str | None = None
+    chat_id: str | None = None
+    error_detail: str | None = None
+    # Full QuickCaptureResponse-shaped dict when status === "ready".
+    result: dict | None = None
+
+
+@router.get("/jobs/{job_id}", response_model=JobStatusResponse)
+async def get_job(
+    job_id: str,
+    user: Annotated[dict, Depends(current_user)],
+):
+    """Mobile polls this to check job status. Returns the same payload
+    shape the old quick-capture used to return, embedded under `result`
+    when the job is `ready`.
+    """
+    row = db.get_job(job_id, user["id"])
+    if not row:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    result = None
+    if row["status"] == "ready" and row["result_json"]:
+        import json as _json
+        try:
+            result = _json.loads(row["result_json"])
+        except Exception:
+            result = None
+    return JobStatusResponse(
+        job_id=row["id"],
+        status=row["status"],
+        mode=row.get("mode"),
+        contact=row.get("contact"),
+        chat_id=row.get("chat_id"),
+        error_detail=row.get("error_detail"),
+        result=result,
     )
 
 

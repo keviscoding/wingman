@@ -146,6 +146,10 @@ export const api = {
     });
   },
 
+  async testPush(token: string): Promise<{ ok: boolean }> {
+    return request("/api/v1/me/test-push", { method: "POST", token });
+  },
+
   async listChats(token: string): Promise<{ chats: ChatSummary[] }> {
     return request<{ chats: ChatSummary[] }>("/api/v1/chats", { token });
   },
@@ -177,12 +181,15 @@ export const api = {
     );
   },
 
-  async quickCapture(
+  /** Upload screenshot. Server returns a job_id IMMEDIATELY (~1-3s).
+   *  Generation happens server-side; we then either poll `getJob`
+   *  or wait for a system push notification. */
+  async quickCaptureUpload(
     token: string,
     image: { uri: string; name?: string; type?: string },
     extra_context = "",
     mode: GenerationMode = "fast",
-  ): Promise<QuickCaptureResult> {
+  ): Promise<{ job_id: string; status: string }> {
     const form = new FormData();
     form.append("screenshot", {
       uri: image.uri,
@@ -191,11 +198,30 @@ export const api = {
     } as any);
     form.append("extra_context", extra_context);
     form.append("mode", mode);
-    return request<QuickCaptureResult>("/api/v1/quick-capture", {
-      method: "POST",
-      token,
-      body: form,
-    });
+    return request<{ job_id: string; status: string }>(
+      "/api/v1/quick-capture",
+      {
+        method: "POST",
+        token,
+        body: form,
+      },
+    );
+  },
+
+  /** Poll job status. Returns shape that includes the full result
+   *  payload under `result` when status === "ready". */
+  async getJob(
+    token: string,
+    jobId: string,
+  ): Promise<{
+    job_id: string;
+    status: "queued" | "running" | "ready" | "error";
+    contact?: string;
+    chat_id?: string;
+    error_detail?: string;
+    result?: QuickCaptureResult;
+  }> {
+    return request("/api/v1/jobs/" + encodeURIComponent(jobId), { token });
   },
 
   async copyReply(

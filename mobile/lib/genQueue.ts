@@ -83,8 +83,10 @@ export function enqueueJob(input: {
 }
 
 async function runJob(token: string, job: Job, refreshMe?: () => void) {
+  // ── Step 1: upload — fast, completes before any backgrounding kills JS.
+  let serverJobId: string;
   try {
-    const result = await api.quickCapture(
+    const r = await api.quickCaptureUpload(
       token,
       {
         uri: job.uri,
@@ -94,27 +96,9 @@ async function runJob(token: string, job: Job, refreshMe?: () => void) {
       "",
       job.mode,
     );
-    cacheRecentResult(result);
-    jobs = jobs.map((j) =>
-      j.id === job.id
-        ? {
-            ...j,
-            status: "ready" as const,
-            result,
-            chatId: result.chat_id,
-            contact: result.contact,
-          }
-        : j,
-    );
-    unseenChats = new Set(unseenChats).add(result.chat_id);
-    emitJobs();
-    emitUnseen();
-    refreshMe?.();
-    firePushReady(result.contact || "your chat");
+    serverJobId = r.job_id;
   } catch (e: any) {
     const detail = e instanceof ApiError ? e.detail : "request_failed";
-    // Quota gates → fire the global paywall sheet so the user has a
-    // direct path to fix it, rather than staring at a dock chip error.
     if (
       detail === "pro_locked_free" ||
       detail === "daily_cap_free" ||
@@ -128,6 +112,78 @@ async function runJob(token: string, job: Job, refreshMe?: () => void) {
         : j,
     );
     emitJobs();
+    return;
+  }
+
+  // ── Step 2: poll the server until the job is ready / errored.
+  // The HTTP request is short-lived (~200ms each) so it survives
+  // background → foreground transitions cleanly. If the JS bridge IS
+  // suspended, the next poll on resume picks up where we left off.
+  // The server-fired push notification is the secondary trigger:
+  // even if polling falls behind, the user already got the bing.
+  const startedAt = job.startedAt;
+  const POLL_MS = 1500;
+  const MAX_S = 90;
+  while (true) {
+    if (Date.now() - startedAt > MAX_S * 1000) {
+      jobs = jobs.map((j) =>
+        j.id === job.id
+          ? { ...j, status: "error" as const, errorDetail: "timeout" }
+          : j,
+      );
+      emitJobs();
+      return;
+    }
+    await new Promise((res) => setTimeout(res, POLL_MS));
+    let snapshot;
+    try {
+      snapshot = await api.getJob(token, serverJobId);
+    } catch (e: any) {
+      // Transient — keep polling. Real failures will surface on the
+      // next poll or via the timeout above.
+      continue;
+    }
+
+    if (snapshot.status === "ready" && snapshot.result) {
+      cacheRecentResult(snapshot.result);
+      jobs = jobs.map((j) =>
+        j.id === job.id
+          ? {
+              ...j,
+              status: "ready" as const,
+              result: snapshot.result,
+              chatId: snapshot.result!.chat_id,
+              contact: snapshot.result!.contact,
+            }
+          : j,
+      );
+      unseenChats = new Set(unseenChats).add(snapshot.result.chat_id);
+      emitJobs();
+      emitUnseen();
+      refreshMe?.();
+      // Fallback in-app trigger when the server's push didn't reach
+      // (rare, but safer to fire both).
+      firePushReady(snapshot.result.contact || "your chat");
+      return;
+    }
+    if (snapshot.status === "error") {
+      const detail = snapshot.error_detail || "request_failed";
+      if (
+        detail === "pro_locked_free" ||
+        detail === "daily_cap_free" ||
+        detail === "lifetime_trial_exhausted"
+      ) {
+        openPaywall(detail);
+      }
+      jobs = jobs.map((j) =>
+        j.id === job.id
+          ? { ...j, status: "error" as const, errorDetail: detail }
+          : j,
+      );
+      emitJobs();
+      return;
+    }
+    // queued or running → keep polling
   }
 }
 

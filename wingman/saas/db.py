@@ -96,6 +96,23 @@ CREATE TABLE IF NOT EXISTS generations (
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS generations_user_idx ON generations(user_id, ts);
+
+-- Async generation jobs. Mobile polls / receives push; never blocks
+-- the upload request through 10+ seconds of Pro generation.
+CREATE TABLE IF NOT EXISTS jobs (
+  id            TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL,
+  status        TEXT NOT NULL,          -- queued / running / ready / error
+  mode          TEXT NOT NULL,          -- fast / pro
+  contact       TEXT,
+  chat_id       TEXT,
+  result_json   TEXT,                   -- full QuickCaptureResponse on ready
+  error_detail  TEXT,                   -- machine-friendly on error
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS jobs_user_idx ON jobs(user_id, created_at);
 """
 
 
@@ -136,6 +153,62 @@ def set_push_token(user_id: str, token: str | None) -> None:
 def get_push_token(user_id: str) -> str | None:
     user = get_user_by_id(user_id)
     return user.get("push_token") if user else None
+
+
+# ---------------------------------------------------------------------------
+# Job helpers — for the async quick-capture pipeline.
+# ---------------------------------------------------------------------------
+
+
+def create_job(job_id: str, user_id: str, mode: str = "fast") -> None:
+    now = int(time.time())
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO jobs (id, user_id, status, mode, created_at, updated_at)
+            VALUES (?, ?, 'queued', ?, ?, ?)
+            """,
+            (job_id, user_id, mode, now, now),
+        )
+
+
+def update_job(
+    job_id: str,
+    *,
+    status: str | None = None,
+    contact: str | None = None,
+    chat_id: str | None = None,
+    result_json: str | None = None,
+    error_detail: str | None = None,
+) -> None:
+    sets, vals = [], []
+    if status is not None:
+        sets.append("status = ?"); vals.append(status)
+    if contact is not None:
+        sets.append("contact = ?"); vals.append(contact)
+    if chat_id is not None:
+        sets.append("chat_id = ?"); vals.append(chat_id)
+    if result_json is not None:
+        sets.append("result_json = ?"); vals.append(result_json)
+    if error_detail is not None:
+        sets.append("error_detail = ?"); vals.append(error_detail)
+    sets.append("updated_at = ?"); vals.append(int(time.time()))
+    vals.append(job_id)
+    with connect() as conn:
+        conn.execute(
+            f"UPDATE jobs SET {', '.join(sets)} WHERE id = ?",
+            vals,
+        )
+
+
+def get_job(job_id: str, user_id: str) -> dict | None:
+    """Returns the job row only if it belongs to this user (auth check)."""
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM jobs WHERE id = ? AND user_id = ?",
+            (job_id, user_id),
+        ).fetchone()
+        return dict(row) if row else None
 
 
 # ---------------------------------------------------------------------------

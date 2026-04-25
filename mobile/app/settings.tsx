@@ -7,13 +7,35 @@ import { useRouter } from "expo-router";
 import { useState } from "react";
 import { Alert, Platform, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { api, ApiError } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { theme } from "../lib/theme";
 import { Pressable, TopBar } from "../components/ui";
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const { me, signOut } = useAuth();
+  const { me, signOut, token } = useAuth();
+
+  const onTestPush = async () => {
+    if (!token) return;
+    try {
+      await api.testPush(token);
+      Alert.alert(
+        "Test sent",
+        "If you don't see a notification within 5 seconds, check Settings → Apps → Wingman → Notifications.",
+      );
+    } catch (e: any) {
+      const detail = e instanceof ApiError ? e.detail : "request_failed";
+      if (detail === "no_push_token_registered") {
+        Alert.alert(
+          "Push token not registered",
+          "Sign out and back in once so the app can register with the server.",
+        );
+      } else {
+        Alert.alert("Test failed", detail);
+      }
+    }
+  };
 
   const onDeleteAccount = () => {
     Alert.alert(
@@ -99,7 +121,13 @@ export default function SettingsScreen() {
           <Row label="Theme" detail="Dark" chevron />
           <ToneRow />
           <Row label="Save chats automatically" toggle on />
-          <Row label="Haptic feedback" toggle on isLast />
+          <Row label="Haptic feedback" toggle on />
+          <Row
+            label="Send test notification"
+            chevron
+            onPress={onTestPush}
+            isLast
+          />
         </Section>
 
         <Section label="About">
