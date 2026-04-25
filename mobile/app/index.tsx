@@ -16,7 +16,7 @@
 
 import * as ImagePicker from "expo-image-picker";
 import { Image } from "expo-image";
-import { useFocusEffect, useRouter } from "expo-router";
+import { useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -143,6 +143,22 @@ export default function HomeScreen() {
   }, [startGeneration]);
 
   /* ─────────────── Triggers ─────────────── */
+  //
+  // Two and ONLY two triggers fire `scan(true)` (autoUpload=true):
+  //   1. App launch (first home mount)
+  //   2. App foreground transition (AppState 'active')
+  //
+  // Re-focusing the home screen via in-app navigation (e.g. back from
+  // chats list) deliberately does NOT scan. Earlier we had a
+  // useFocusEffect calling scan(false), which raced with the
+  // AppState handler — focus would land first, claim the
+  // scanInFlight lock, and the AppState scan would no-op. Net effect:
+  // user came back to the app after taking a screenshot and saw the
+  // 'New screenshot — Analyze?' banner instead of auto-fire.
+  //
+  // Removing the focus-scan fixes that race entirely. The home's
+  // ready-state thumbnail is refreshed by the foreground AppState
+  // scan anyway, so we lose nothing.
 
   useEffect(() => {
     scan(true);
@@ -154,13 +170,6 @@ export default function HomeScreen() {
     });
     return () => sub.remove();
   }, [scan]);
-
-
-  useFocusEffect(
-    useCallback(() => {
-      scan(false);
-    }, [scan]),
-  );
 
   /* ─────────────── Render ─────────────── */
 
