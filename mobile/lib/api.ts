@@ -165,13 +165,15 @@ export const api = {
     });
   },
 
-  async regenerate(
+  /** Async regenerate. Returns a job_id immediately; client polls
+   *  /jobs/{id} (same as quick-capture) and waits for the push. */
+  async regenerateUpload(
     token: string,
     id: string,
     extra_context = "",
     mode: GenerationMode = "fast",
-  ): Promise<any> {
-    return request<any>(
+  ): Promise<{ job_id: string; status: string }> {
+    return request<{ job_id: string; status: string }>(
       `/api/v1/chats/${encodeURIComponent(id)}/regenerate`,
       {
         method: "POST",

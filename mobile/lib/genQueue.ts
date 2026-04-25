@@ -19,19 +19,25 @@ import { cacheRecentResult } from "./recentResult";
 import { openPaywall } from "./paywallStore";
 import { firePushReady } from "./pushNotify";
 
+export type JobKind = "capture" | "regenerate";
+
 export type Job = {
   id: string; // local uuid
-  uri: string;
+  kind: JobKind;
+  // Capture-only
+  uri?: string;
   filename?: string | null;
   screenshotId?: string | null;
+  // Regenerate-only
+  regenChatId?: string;
+  regenContact?: string; // pre-known contact name for nicer chip
+  // Both
   mode: GenerationMode;
   status: "running" | "ready" | "error";
   startedAt: number;
-  // Populated when status === 'ready'
   result?: QuickCaptureResult;
   contact?: string;
   chatId?: string;
-  // Populated when status === 'error'
   errorDetail?: string;
 };
 
@@ -67,6 +73,7 @@ export function enqueueJob(input: {
 }): Job {
   const job: Job = {
     id: uuid(),
+    kind: "capture",
     uri: input.uri,
     filename: input.filename,
     screenshotId: input.screenshotId,
@@ -76,9 +83,34 @@ export function enqueueJob(input: {
   };
   jobs = [job, ...jobs];
   emitJobs();
-  // Fire-and-forget: the job runs in the background even if every
-  // screen unmounts.
   void runJob(input.token, job, input.refreshMe);
+  return job;
+}
+
+/** Enqueue a regenerate-existing-chat job. Same lifecycle as capture
+ *  jobs (dock chip, push, polling) — just no screenshot upload. */
+export function enqueueRegenerate(input: {
+  token: string;
+  chatId: string;
+  contact?: string;
+  extraContext?: string;
+  mode?: GenerationMode;
+  refreshMe?: () => void;
+}): Job {
+  const job: Job = {
+    id: uuid(),
+    kind: "regenerate",
+    regenChatId: input.chatId,
+    regenContact: input.contact,
+    mode: input.mode || "fast",
+    status: "running",
+    startedAt: Date.now(),
+    contact: input.contact,
+    chatId: input.chatId,
+  };
+  jobs = [job, ...jobs];
+  emitJobs();
+  void runRegenJob(input.token, job, input.extraContext || "", input.refreshMe);
   return job;
 }
 
@@ -89,7 +121,7 @@ async function runJob(token: string, job: Job, refreshMe?: () => void) {
     const r = await api.quickCaptureUpload(
       token,
       {
-        uri: job.uri,
+        uri: job.uri || "",
         name: job.filename || "screenshot.jpg",
         type: "image/jpeg",
       },
@@ -98,36 +130,53 @@ async function runJob(token: string, job: Job, refreshMe?: () => void) {
     );
     serverJobId = r.job_id;
   } catch (e: any) {
-    const detail = e instanceof ApiError ? e.detail : "request_failed";
-    if (
-      detail === "pro_locked_free" ||
-      detail === "daily_cap_free" ||
-      detail === "lifetime_trial_exhausted"
-    ) {
-      openPaywall(detail);
-    }
-    jobs = jobs.map((j) =>
-      j.id === job.id
-        ? { ...j, status: "error" as const, errorDetail: detail }
-        : j,
-    );
-    emitJobs();
+    handleJobError(job.id, e);
     return;
   }
+  await pollServerJob(token, job.id, serverJobId, refreshMe);
+}
 
-  // ── Step 2: poll the server until the job is ready / errored.
-  // The HTTP request is short-lived (~200ms each) so it survives
-  // background → foreground transitions cleanly. If the JS bridge IS
-  // suspended, the next poll on resume picks up where we left off.
-  // The server-fired push notification is the secondary trigger:
-  // even if polling falls behind, the user already got the bing.
-  const startedAt = job.startedAt;
+async function runRegenJob(
+  token: string,
+  job: Job,
+  extraContext: string,
+  refreshMe?: () => void,
+) {
+  if (!job.regenChatId) {
+    handleJobError(job.id, new ApiError(0, "missing_chat_id"));
+    return;
+  }
+  let serverJobId: string;
+  try {
+    const r = await api.regenerateUpload(
+      token,
+      job.regenChatId,
+      extraContext,
+      job.mode,
+    );
+    serverJobId = r.job_id;
+  } catch (e: any) {
+    handleJobError(job.id, e);
+    return;
+  }
+  await pollServerJob(token, job.id, serverJobId, refreshMe);
+}
+
+/** Shared 1.5s polling loop. Same poll behavior whether we're waiting
+ *  on a capture or a regenerate — the server's job table is unified. */
+async function pollServerJob(
+  token: string,
+  localJobId: string,
+  serverJobId: string,
+  refreshMe?: () => void,
+) {
   const POLL_MS = 1500;
   const MAX_S = 90;
+  const startedAt = Date.now();
   while (true) {
     if (Date.now() - startedAt > MAX_S * 1000) {
       jobs = jobs.map((j) =>
-        j.id === job.id
+        j.id === localJobId
           ? { ...j, status: "error" as const, errorDetail: "timeout" }
           : j,
       );
@@ -138,16 +187,13 @@ async function runJob(token: string, job: Job, refreshMe?: () => void) {
     let snapshot;
     try {
       snapshot = await api.getJob(token, serverJobId);
-    } catch (e: any) {
-      // Transient — keep polling. Real failures will surface on the
-      // next poll or via the timeout above.
+    } catch {
       continue;
     }
-
     if (snapshot.status === "ready" && snapshot.result) {
       cacheRecentResult(snapshot.result);
       jobs = jobs.map((j) =>
-        j.id === job.id
+        j.id === localJobId
           ? {
               ...j,
               status: "ready" as const,
@@ -161,8 +207,6 @@ async function runJob(token: string, job: Job, refreshMe?: () => void) {
       emitJobs();
       emitUnseen();
       refreshMe?.();
-      // Fallback in-app trigger when the server's push didn't reach
-      // (rare, but safer to fire both).
       firePushReady(snapshot.result.contact || "your chat");
       return;
     }
@@ -176,15 +220,31 @@ async function runJob(token: string, job: Job, refreshMe?: () => void) {
         openPaywall(detail);
       }
       jobs = jobs.map((j) =>
-        j.id === job.id
+        j.id === localJobId
           ? { ...j, status: "error" as const, errorDetail: detail }
           : j,
       );
       emitJobs();
       return;
     }
-    // queued or running → keep polling
   }
+}
+
+function handleJobError(localJobId: string, e: any) {
+  const detail = e instanceof ApiError ? e.detail : "request_failed";
+  if (
+    detail === "pro_locked_free" ||
+    detail === "daily_cap_free" ||
+    detail === "lifetime_trial_exhausted"
+  ) {
+    openPaywall(detail);
+  }
+  jobs = jobs.map((j) =>
+    j.id === localJobId
+      ? { ...j, status: "error" as const, errorDetail: detail }
+      : j,
+  );
+  emitJobs();
 }
 
 /** Remove a job (e.g. after the user opens its chat or dismisses it). */
@@ -246,4 +306,22 @@ export function useUnseenChats(): Set<string> {
 
 export function useHasUnseen(): boolean {
   return useUnseenChats().size > 0;
+}
+
+/** Returns the most recent "ready" or "running" regenerate job for
+ *  a given chat. Used by the chat detail screen to:
+ *    - hide the static "Regenerate replies" button while a regen is
+ *      in flight (the dock chip becomes the loading indicator)
+ *    - auto-refresh its own data when a regen finishes for this chat
+ */
+export function useLatestJobForChat(chatId: string | undefined): Job | null {
+  const all = useJobs();
+  if (!chatId) return null;
+  // Newest first (jobs array is unshifted on enqueue).
+  for (const j of all) {
+    if (j.chatId === chatId || j.regenChatId === chatId) {
+      return j;
+    }
+  }
+  return null;
 }
