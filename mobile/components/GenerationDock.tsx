@@ -113,18 +113,12 @@ function JobChip({
   }, [job.status, job.startedAt]);
 
   if (job.status === "running") {
-    // Distinguish regen (we have a contact already) from a fresh
-    // capture (we won't until the server extracts the chat).
-    const title =
-      job.kind === "regenerate"
-        ? `Regenerating · ${job.regenContact || job.contact || "chat"}`
-        : "Generating replies";
     return (
       <Chip
         bg={theme.accentDim}
         border={theme.accent}
         leading={<ActivityIndicator size="small" color={theme.accent} />}
-        title={title}
+        title="Generating replies"
         subtitle={`${age}s · keep using the app`}
         onClose={onDismiss}
         closeColor={theme.accent}
@@ -140,10 +134,6 @@ function JobChip({
       Math.floor(((job.result?.generated_at || Date.now() / 1000) * 1000 - job.startedAt) / 1000),
     );
     const subtitle = took > 0 ? `Tap to view · ${took}s` : "Tap to view";
-    const title =
-      job.kind === "regenerate"
-        ? `Fresh replies · ${job.contact || "chat"}`
-        : `Replies ready · ${job.contact || "chat"}`;
     return (
       <Chip
         bg={theme.accent}
@@ -159,7 +149,7 @@ function JobChip({
             ✓
           </Text>
         }
-        title={title}
+        title={`Replies ready · ${job.contact || "chat"}`}
         subtitle={subtitle}
         onTap={onView}
         onClose={onDismiss}

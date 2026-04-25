@@ -15,12 +15,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api, ApiError, ReplyOption } from "../../lib/api";
 import { useAuth } from "../../lib/auth";
-import {
-  enqueueRegenerate,
-  markChatSeen,
-  useLatestJobForChat,
-  useUnseenChats,
-} from "../../lib/genQueue";
+import { markChatSeen, useUnseenChats } from "../../lib/genQueue";
 import { openPaywall } from "../../lib/paywallStore";
 import { takeCachedResult } from "../../lib/recentResult";
 import { theme, Angle } from "../../lib/theme";
@@ -75,17 +70,11 @@ export default function ChatDetailScreen() {
       : null,
   );
   const [loading, setLoading] = useState(!initial);
+  const [regenerating, setRegenerating] = useState(false);
   const [extra, setExtra] = useState("");
   const [showExtra, setShowExtra] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useMode();
-
-  // Watch the global queue for a regen job tied to this chat so the
-  // button becomes a "Regenerating…" disabled state, and we auto-pull
-  // fresh data when it completes.
-  const liveJob = useLatestJobForChat(id);
-  const regenerating =
-    liveJob?.kind === "regenerate" && liveJob.status === "running";
 
   const load = useCallback(
     async (force = false) => {
@@ -118,44 +107,37 @@ export default function ChatDetailScreen() {
     if (id) markChatSeen(id);
   }, [id]);
 
-  // When a regen job for THIS chat completes, fold its result back
-  // into our local data. The dock chip already showed the user "ready";
-  // this just keeps the on-screen detail in sync without forcing a
-  // full GET round trip.
-  useEffect(() => {
-    if (
-      liveJob?.status === "ready" &&
-      liveJob.kind === "regenerate" &&
-      liveJob.result
-    ) {
-      const r = liveJob.result;
+  const onRegenerate = async () => {
+    if (!token || !id || regenerating) return;
+    setRegenerating(true);
+    try {
+      const r = await api.regenerate(token, id, extra, mode);
       setData((prev) =>
         prev
           ? {
               ...prev,
-              replies: r.replies || prev.replies,
-              read: r.read || prev.read,
-              advice: r.advice || prev.advice,
+              replies: r.replies || [],
+              read: r.read || "",
+              advice: r.advice || "",
             }
           : prev,
       );
+      setExtra("");
+      setShowExtra(false);
+    } catch (e: any) {
+      const detail = e instanceof ApiError ? e.detail : "request_failed";
+      if (
+        detail === "pro_locked_free" ||
+        detail === "daily_cap_free" ||
+        detail === "lifetime_trial_exhausted"
+      ) {
+        openPaywall(detail);
+      } else {
+        Alert.alert("Couldn't regenerate", prettyDetail(detail));
+      }
+    } finally {
+      setRegenerating(false);
     }
-  }, [liveJob?.status, liveJob?.kind]);
-
-  const onRegenerate = () => {
-    if (!token || !id || regenerating) return;
-    // Hand off to the global queue. Returns immediately — the dock
-    // chip becomes the loading indicator, and the useEffect above
-    // folds the result back into our local data when it's ready.
-    enqueueRegenerate({
-      token,
-      chatId: id,
-      contact: data?.contact || (typeof contact === "string" ? contact : undefined),
-      extraContext: extra,
-      mode,
-    });
-    setExtra("");
-    setShowExtra(false);
   };
 
   const prettyDetail = (d: string) => {

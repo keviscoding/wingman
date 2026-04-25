@@ -426,126 +426,51 @@ class RegenerateRequest(BaseModel):
     mode: str = "fast"
 
 
-@router.post(
-    "/chats/{chat_id}/regenerate",
-    response_model=QueuedJobResponse,
-    status_code=202,
-)
+@router.post("/chats/{chat_id}/regenerate")
 async def regenerate(
     chat_id: str,
     body: RegenerateRequest,
     user: Annotated[dict, Depends(current_user)],
 ):
-    """Async regenerate: returns immediately with a job_id. Same job
-    machinery as /quick-capture so the mobile dock chip works
-    identically for both flows.
-    """
     mode = body.mode if body.mode in ("fast", "pro") else "fast"
     allowed, reason = db.can_generate(user["id"], mode=mode)
     if not allowed:
         raise HTTPException(status_code=402, detail=reason)
-
-    # Verify the chat exists for this user before queueing — saves us
-    # from queueing a job that's guaranteed to fail.
-    ctx = get_context(user["id"], plan=user.get("plan", "free"))
-    from .pipeline import _user_chat_store
-    if not _user_chat_store(ctx).load(chat_id):
-        raise HTTPException(status_code=404, detail="chat_not_found")
-
-    import secrets
-    job_id = secrets.token_urlsafe(16)
-    db.create_job(job_id, user["id"], mode=mode)
-
-    asyncio.create_task(
-        _process_regen_job(
-            job_id=job_id,
-            user_id=user["id"],
-            ctx=ctx,
-            chat_id=chat_id,
+    from .pipeline import regenerate_for_user
+    try:
+        result = await regenerate_for_user(
+            get_context(user["id"]), chat_id,
             extra_context=body.extra_context,
             mode=mode,
         )
-    )
-    return QueuedJobResponse(job_id=job_id)
-
-
-async def _process_regen_job(
-    *,
-    job_id: str,
-    user_id: str,
-    ctx,
-    chat_id: str,
-    extra_context: str,
-    mode: str,
-) -> None:
-    """Background worker for chat-detail regenerate. Same shape as
-    _process_job (capture flow) so the mobile poll handler doesn't
-    need to special-case anything."""
-    import json as _json
-    from .pipeline import regenerate_for_user
-
-    db.update_job(job_id, status="running")
-    try:
-        result = await regenerate_for_user(
-            ctx, chat_id, extra_context=extra_context, mode=mode,
-        )
-        if not result.get("replies"):
-            db.update_job(job_id, status="error", error_detail="no_replies_produced")
-            return
-
-        db.record_generation(
-            user_id=user_id,
-            model=result.get("model", "unknown"),
-            cost_cents=result.get("cost_cents", 0),
-            reply_count=len(result["replies"]),
-            mode=mode,
-        )
-
-        # Regenerate doesn't include the full transcript by default —
-        # the chat detail screen already has it. We do return contact
-        # so the dock chip can identify which chat it was.
-        payload = {
-            "job_id": job_id,
-            "chat_id": chat_id,
-            "contact": result.get("contact", chat_id),
-            "transcript": result.get("transcript", []),
-            "replies": result["replies"],
-            "read": result.get("read", ""),
-            "advice": result.get("advice", ""),
-            "generated_at": int(time.time()),
-            "model": result.get("model", "tuned-v4"),
-            "kind": "regenerate",
-        }
-        db.update_job(
-            job_id,
-            status="ready",
-            contact=result.get("contact", chat_id),
-            chat_id=chat_id,
-            result_json=_json.dumps(payload, ensure_ascii=False),
-        )
-
-        push_token = db.get_push_token(user_id)
-        if push_token:
-            from .push import send_expo_push
-            await send_expo_push(
-                push_token,
-                title="Fresh replies ready ✓",
-                body=f"New replies for {result.get('contact', chat_id)} · tap to view",
-                data={
-                    "job_id": job_id,
-                    "chat_id": chat_id,
-                    "contact": result.get("contact"),
-                    "kind": "regenerate",
-                },
-            )
-    except Exception as exc:
+    except KeyError:
+        raise HTTPException(status_code=404, detail="chat_not_found")
+    except Exception:
         import traceback
         traceback.print_exc()
-        db.update_job(
-            job_id,
-            status="error",
-            error_detail=str(exc)[:500],
+        raise HTTPException(status_code=500, detail="generation_failed")
+    if not result.get("replies"):
+        raise HTTPException(status_code=502, detail="no_replies_produced")
+    db.record_generation(
+        user_id=user["id"],
+        model=result.get("model", "unknown"),
+        cost_cents=result.get("cost_cents", 0),
+        reply_count=len(result["replies"]),
+        mode=mode,
+    )
+    push_token = db.get_push_token(user["id"])
+    if push_token:
+        from .push import fire_and_forget
+        fire_and_forget(
+            push_token,
+            title="Fresh replies ready ✓",
+            body=f"New replies for {result.get('contact', 'your chat')} · tap to view",
+            data={
+                "chat_id": result.get("chat_id", chat_id),
+                "contact": result.get("contact"),
+            },
         )
+    return result
 
 
 @router.delete("/chats/{chat_id}")
