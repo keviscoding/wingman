@@ -16,7 +16,12 @@ data/
 mobile/
 WINGMAN UI/
 mockups/
-training/
+
+# Raw training transcripts stay private — but the precomputed Master
+# Playbook (training/.master_playbook.json) MUST ship so Pro replies
+# get the trained-voice quality. Negation rule below whitelists it.
+training/*
+!training/.master_playbook.json
 
 # Notebooks + dev scripts
 *.ipynb
