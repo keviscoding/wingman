@@ -1,11 +1,12 @@
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
-import { View } from "react-native";
+import { AppState, View } from "react-native";
 import { GenerationDock } from "../components/GenerationDock";
 import { PaywallSheet } from "../components/PaywallSheet";
 import { AuthProvider, useAuth } from "../lib/auth";
 import { useOnboardingSeen } from "../lib/onboardingState";
+import { checkAndApplyUpdate } from "../lib/otaCheck";
 import { dismissPaywall, usePaywallSignal } from "../lib/paywallStore";
 import { api } from "../lib/api";
 import { getExpoPushToken, primeNotifications } from "../lib/pushNotify";
@@ -16,6 +17,18 @@ function AuthGate() {
   const { seen } = useOnboardingSeen();
   const segments = useSegments();
   const router = useRouter();
+
+  // Active OTA poll — runs once on app launch, then on every
+  // foreground transition. If a new JS bundle is published, we
+  // download + reloadAsync inside this hook. No "second restart"
+  // dance, no perpetually-one-version-behind state.
+  useEffect(() => {
+    checkAndApplyUpdate();
+    const sub = AppState.addEventListener("change", (s) => {
+      if (s === "active") checkAndApplyUpdate();
+    });
+    return () => sub.remove();
+  }, []);
 
   useEffect(() => {
     if (loading || seen === null) return;

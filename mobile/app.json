@@ -76,7 +76,10 @@
     },
     "owner": "kevisatnorthumbria",
     "updates": {
-      "url": "https://u.expo.dev/48c58bd6-8026-416d-b830-aa37bfa4fe7f"
+      "url": "https://u.expo.dev/48c58bd6-8026-416d-b830-aa37bfa4fe7f",
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0,
+      "enabled": true
     }
   }
 }
