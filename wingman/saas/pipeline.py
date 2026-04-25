@@ -341,26 +341,50 @@ async def _generate_pro_for_user_messages(
 
     transcript = _format_transcript(messages)
 
-    def build_user_prompt(safe: bool) -> str:
-        prompt_template = REPLY_SYSTEM_PROMPT_SAFE if safe else REPLY_SYSTEM_PROMPT
-        out = prompt_template.format(transcript=transcript)
-        # Time context — useful for "she replied 3 days ago, what's
-        # the right cadence" type reasoning.
-        now = datetime.now().strftime("%A %B %d, %Y at %I:%M %p")
-        out += f"\n\nCurrent date/time: {now}."
-        if extra_context.strip():
-            out += f"\n\nExtra context from the user:\n{extra_context.strip()}"
-        return out
-
-    # System instruction: Master Playbook (the condensed wisdom from
-    # 121 training transcripts).
-    system_instr = ""
+    # Master Playbook — distilled wisdom from 121 training transcripts.
+    # Whitelisted in git as training/.master_playbook.json so it ships
+    # with every deploy (the raw transcripts stay private).
+    playbook = ""
     try:
         rag = TrainingRAG()
         rag.load()
-        system_instr = (rag.knowledge_summary or "").strip()
+        playbook = (rag.knowledge_summary or "").strip()
     except Exception as exc:
         print(f"[saas-pipeline] playbook load failed: {exc}")
+    if not playbook:
+        print("[saas-pipeline] WARNING: playbook empty — Pro replies will be vanilla")
+
+    def build_system_instruction(safe: bool) -> str:
+        """Match desktop's Pro structure: rules portion of the system
+        prompt + Master Playbook in the system_instruction. The
+        transcript itself goes in the user prompt below.
+
+        REPLY_SYSTEM_PROMPT contains both rules + a `Conversation:
+        {transcript}` placeholder; we strip the placeholder portion
+        out so only the rules end up here."""
+        base = REPLY_SYSTEM_PROMPT_SAFE if safe else REPLY_SYSTEM_PROMPT
+        rules_only = base.split("Conversation:\n{transcript}")[0].rstrip()
+        parts = [rules_only]
+        if playbook:
+            parts.append(playbook)
+        return "\n\n".join(parts)
+
+    def build_user_prompt() -> str:
+        """Match desktop: time context, transcript, extra context, then
+        the explicit JSON format reminder at the end."""
+        now = datetime.now().strftime("%A %B %d, %Y at %I:%M %p")
+        parts = [
+            f"Current date/time: {now}.",
+            f"Conversation:\n{transcript}",
+        ]
+        if extra_context.strip():
+            parts.append(f"Additional context: {extra_context.strip()}")
+        parts.append(
+            "Format as JSON:\n"
+            '{"read": "...", "advice": "...", "replies": '
+            '[{"label": "...", "text": "...", "why": "..."}]}'
+        )
+        return "\n\n".join(parts)
 
     image_part = None
     if img_bytes:
@@ -372,14 +396,18 @@ async def _generate_pro_for_user_messages(
             print(f"[saas-pipeline] image-part build failed: {exc}")
             image_part = None
 
-    def build_config():
+    def build_config(safe: bool):
+        # Match desktop's Pro config exactly — temperature 0.9 and a
+        # 32k output budget. Pro burns thinking tokens before emitting
+        # JSON; an 8k cap was truncating the response and stripping
+        # quality. The hard ceiling on Pro is much higher; 32k leaves
+        # plenty of room for thinking + the structured JSON output.
         kwargs = {
-            "temperature": 0.85,
-            "max_output_tokens": 8192,
+            "system_instruction": build_system_instruction(safe),
+            "temperature": 0.9,
+            "max_output_tokens": 32768,
             "response_mime_type": "application/json",
         }
-        if system_instr:
-            kwargs["system_instruction"] = system_instr
         try:
             kwargs["safety_settings"] = permissive_safety_settings()
         except Exception:
@@ -389,11 +417,17 @@ async def _generate_pro_for_user_messages(
     async def attempt(safe: bool, with_image: bool) -> tuple[bool, dict | None, str]:
         """Single attempt. Returns (succeeded, parsed_data, last_err).
         Parsed_data is None on failure."""
-        prompt = build_user_prompt(safe)
-        # contents: prompt first, then image if available
+        prompt = build_user_prompt()
+        # contents: text prompt first, then image (if available), then
+        # a visual-context note. Mirrors how desktop builds it.
         contents: list = [prompt]
         if with_image and image_part is not None:
             contents.append(image_part)
+            contents.append(
+                "The screenshot above shows the actual chat. Use it for "
+                "visual context (profile photos, read receipts, "
+                "timestamps, UI cues)."
+            )
         client = make_genai_client()
         for _ in range(max(1, len(_ALL_KEYS))):
             try:
@@ -402,7 +436,7 @@ async def _generate_pro_for_user_messages(
                         client.models.generate_content,
                         model=PRO_MODEL,
                         contents=contents,
-                        config=build_config(),
+                        config=build_config(safe=safe),
                     ),
                     timeout=50,
                 )

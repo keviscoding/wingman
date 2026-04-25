@@ -89,9 +89,24 @@ class TrainingRAG:
 
     def load(self) -> bool:
         files = self._list_training_files()
+        # SaaS server case: raw transcripts aren't deployed (private),
+        # only the precomputed .master_playbook.json is. Use it directly
+        # without trying to recompute or hash-check.
         if not files:
+            if PLAYBOOK_CACHE_PATH.exists():
+                try:
+                    data = json.loads(PLAYBOOK_CACHE_PATH.read_text())
+                    pb = data.get("playbook", "")
+                    if pb:
+                        self._playbook = pb
+                        self._file_hash = data.get("hash", "")
+                        self.status = "loaded (cache only)"
+                        print(f"[playbook] Loaded cached playbook from disk ({len(pb):,} chars)")
+                        return True
+                except Exception as exc:
+                    print(f"[playbook] Cache file unreadable: {exc}")
             self.status = "no files"
-            print(f"[playbook] No training files in {TRAINING_DIR}/")
+            print(f"[playbook] No training files in {TRAINING_DIR}/ and no cached playbook")
             return False
 
         file_hash = self._compute_hash(files)
