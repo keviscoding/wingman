@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Wingman — App Mockups</title>
+  <link rel="stylesheet" href="colors_and_type.css">
+  <style>
+    html, body { height: 100%; margin: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; background: #f0eee9; }
+    #root { height: 100%; }
+    @keyframes wm-spin { to { transform: rotate(360deg); } }
+    @keyframes wm-shimmer {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(100%); }
+    }
+    .wm-screen {
+      width: 393px;
+      height: 852px;
+      background: #0a0a0f;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      position: relative;
+      border-radius: 0;
+    }
+    /* Hide scrollbars inside screens */
+    .wm-screen *::-webkit-scrollbar { display: none; }
+    .wm-screen * { scrollbar-width: none; }
+  </style>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <script type="text/babel" src="design-canvas.jsx"></script>
+  <script type="text/babel" src="ios-frame.jsx"></script>
+  <script type="text/babel" src="Wingman.jsx"></script>
+  <script type="text/babel" src="AuthScreen.jsx"></script>
+  <script type="text/babel" src="HomeScreen.jsx"></script>
+  <script type="text/babel" src="ChatsListScreen.jsx"></script>
+  <script type="text/babel" src="ChatDetailScreen.jsx"></script>
+  <script type="text/babel" src="PaywallSheet.jsx"></script>
+  <script type="text/babel" src="OnboardingScreen.jsx"></script>
+  <script type="text/babel" src="EdgeStates.jsx"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" data-presets="env,react">
+    const { useState } = React;
+
+    // ─────────────────────────────────────────────────────────────
+    // iOS status bar (small) — drawn at top of every screen
+    // ─────────────────────────────────────────────────────────────
+    function StatusBar() {
+      return (
+        <div style={{
+          height: 54, padding: '0 28px',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          color: '#f5f5f7', fontSize: 17, fontWeight: 600,
+          flexShrink: 0,
+          paddingTop: 14,
+        }}>
+          <span style={{ fontFeatureSettings: '"tnum"' }}>9:41</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <svg width="18" height="11" viewBox="0 0 19 12">
+              <rect x="0" y="7.5" width="3.2" height="4.5" rx="0.7" fill="#f5f5f7"/>
+              <rect x="4.8" y="5" width="3.2" height="7" rx="0.7" fill="#f5f5f7"/>
+              <rect x="9.6" y="2.5" width="3.2" height="9.5" rx="0.7" fill="#f5f5f7"/>
+              <rect x="14.4" y="0" width="3.2" height="12" rx="0.7" fill="#f5f5f7"/>
+            </svg>
+            <svg width="16" height="11" viewBox="0 0 17 12">
+              <path d="M8.5 3.2C10.8 3.2 12.9 4.1 14.4 5.6L15.5 4.5C13.7 2.7 11.2 1.5 8.5 1.5C5.8 1.5 3.3 2.7 1.5 4.5L2.6 5.6C4.1 4.1 6.2 3.2 8.5 3.2Z" fill="#f5f5f7"/>
+              <path d="M8.5 6.8C9.9 6.8 11.1 7.3 12 8.2L13.1 7.1C11.8 5.9 10.2 5.1 8.5 5.1C6.8 5.1 5.2 5.9 3.9 7.1L5 8.2C5.9 7.3 7.1 6.8 8.5 6.8Z" fill="#f5f5f7"/>
+              <circle cx="8.5" cy="10.5" r="1.5" fill="#f5f5f7"/>
+            </svg>
+            <svg width="25" height="12" viewBox="0 0 27 13">
+              <rect x="0.5" y="0.5" width="23" height="12" rx="3.5" stroke="#f5f5f7" strokeOpacity="0.4" fill="none"/>
+              <rect x="2" y="2" width="20" height="9" rx="2" fill="#f5f5f7"/>
+              <path d="M25 4.5V8.5C25.8 8.2 26.5 7.2 26.5 6.5C26.5 5.8 25.8 4.8 25 4.5Z" fill="#f5f5f7" fillOpacity="0.4"/>
+            </svg>
+          </div>
+        </div>
+      );
+    }
+    function HomeIndicator({ light }) {
+      return (
+        <div style={{
+          position: 'absolute', bottom: 0, left: 0, right: 0,
+          height: 28, display: 'flex', justifyContent: 'center', alignItems: 'flex-end',
+          paddingBottom: 8, pointerEvents: 'none', zIndex: 60,
+        }}>
+          <div style={{
+            width: 134, height: 5, borderRadius: 100,
+            background: light ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.55)',
+          }} />
+        </div>
+      );
+    }
+    function DynamicIsland() {
+      return (
+        <div style={{
+          position: 'absolute', top: 11, left: '50%', transform: 'translateX(-50%)',
+          width: 124, height: 35, borderRadius: 24, background: '#000', zIndex: 50,
+        }} />
+      );
+    }
+
+    // Wrapper that places a screen inside a 393×852 frame with status bar + home indicator
+    function Screen({ children }) {
+      return (
+        <div className="wm-screen">
+          <DynamicIsland />
+          <StatusBar />
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+            {children}
+          </div>
+          <HomeIndicator />
+        </div>
+      );
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Static result-state ResultView with the Copy flash already triggered
+    // ─────────────────────────────────────────────────────────────
+    function ResultViewStatic({ flashIdx = -1 }) {
+      const replies = [
+        { angle: "BOLD", text: "Sounds like a busy week — earn it. Friday, 8pm, my place. Wine's on me.", why: "frame challenge — punishes her flake" },
+        { angle: "PLAYFUL", text: "Busy is a personality trait now? Bold of you. Tell me one good thing.", why: "match her energy, raise the stakes" },
+        { angle: "SEXUAL", text: "Sleeping under the stars? You're trouble. I want details over dinner.", why: "callback + escalation" },
+        { angle: "SINCERE", text: "That sounds incredible. What was the moment you'll remember most?", why: "invite a real story, build rapport" },
+        { angle: "CURIOUS", text: "Wait — alone, or who dragged you out there?", why: "lightweight probe, opens a thread" },
+      ];
+      return (
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+          <div style={{ padding: '20px 16px 100px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 4px 4px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <div style={{ fontSize: 17, fontWeight: 700, color: '#f5f5f7' }}>Amy</div>
+                <span style={{ color: '#66e0b4', fontSize: 13, fontWeight: 600, opacity: 0.85 }}>Saved to your chats →</span>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <div style={{ width: 36, height: 36, borderRadius: 10, background: '#13131c', border: '1px solid #2a2a3a', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9494a3' }}>
+                  <Icon name="refresh" size={16} />
+                </div>
+                <div style={{ width: 36, height: 36, borderRadius: 10, background: '#13131c', border: '1px solid #2a2a3a', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9494a3' }}>
+                  <Icon name="plus" size={16} />
+                </div>
+              </div>
+            </div>
+            {replies.map((r, i) => {
+              const flash = i === flashIdx;
+              return (
+                <div key={r.angle} style={{
+                  background: '#13131c', borderRadius: 16, padding: 16,
+                  border: `${flash ? 2 : 1}px solid ${flash ? '#66e0b4' : '#2a2a3a'}`,
+                  display: 'flex', flexDirection: 'column', gap: 8,
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: W.angle[r.angle], lineHeight: 1 }}>{r.angle}</span>
+                    <span style={{ fontSize: 13, color: flash ? '#66e0b4' : '#5f5f6e', fontWeight: flash ? 600 : 400 }}>
+                      {flash ? 'Copied ✓' : 'Tap to copy'}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 17, lineHeight: 1.45, color: '#f5f5f7' }}>{r.text}</div>
+                  <div style={{ fontSize: 13, fontStyle: 'italic', color: '#9494a3' }}>{r.why}</div>
+                </div>
+              );
+            })}
+            <div style={{ background: '#1a1a25', borderRadius: 12, padding: 14, marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ fontSize: 14, color: '#f5f5f7', lineHeight: 1.4 }}><span style={{ color: '#9494a3', fontWeight: 700 }}>Read:</span> she's testing your investment by playing busy</div>
+              <div style={{ fontSize: 14, color: '#f5f5f7', lineHeight: 1.4 }}><span style={{ color: '#9494a3', fontWeight: 700 }}>Move:</span> takeaway, then ping in 48h</div>
+            </div>
+          </div>
+          <div style={{ position: 'absolute', bottom: 38, left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
+            <div style={{
+              padding: '12px 18px', borderRadius: 999,
+              background: '#66e0b4', color: '#0a0a0f', fontSize: 15, fontWeight: 700,
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+            }}>
+              <Icon name="plus" size={16} strokeWidth={2.25} /> Add new screenshot
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // Static HomeScreen wrapper for canvas — accepts state
+    function HomeStatic({ state, flashIdx }) {
+      // Re-uses real HomeScreen for non-result, but result swaps to static so flash works
+      if (state === 'result') {
+        return (
+          <Screen>
+            <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: '#0a0a0f', color: '#f5f5f7' }}>
+              <TopBar
+                quota="Pro · 12/200"
+                right={
+                  <>
+                    <ChatsPill onOpenChats={() => {}} />
+                    <div style={{ width: 32, height: 32, borderRadius: '50%', background: '#1a1a25', border: '1px solid #2a2a3a', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9494a3' }}>
+                      <Icon name="more" size={16} />
+                    </div>
+                  </>
+                }
+              />
+              <ResultViewStatic flashIdx={flashIdx} />
+            </div>
+          </Screen>
+        );
+      }
+      return (
+        <Screen>
+          <HomeScreen state={state} onChangeState={() => {}} onOpenChats={() => {}} onOpenPaywall={() => {}} />
+        </Screen>
+      );
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Wrapped App
+    // ─────────────────────────────────────────────────────────────
+    function App() {
+      const W = 393, H = 852;
+      return (
+        <DesignCanvas>
+          <DCSection id="overview" title="Wingman" subtitle="A premium AI assistant for dating-app replies. Take a screenshot, get 5 angles, paste back. iPhone 14 Pro · 393×852.">
+            <DCArtboard id="onboarding-1" label="Onboarding · 1" width={W} height={H}>
+              <Screen>
+                <OnboardingStaticSlide step={0} />
+              </Screen>
+            </DCArtboard>
+            <DCArtboard id="onboarding-2" label="Onboarding · 2" width={W} height={H}>
+              <Screen>
+                <OnboardingStaticSlide step={1} />
+              </Screen>
+            </DCArtboard>
+            <DCArtboard id="onboarding-3" label="Onboarding · 3" width={W} height={H}>
+              <Screen>
+                <OnboardingStaticSlide step={2} />
+              </Screen>
+            </DCArtboard>
+            <DCArtboard id="signup" label="Sign up" width={W} height={H}>
+              <Screen>
+                <AuthScreen onSubmit={() => {}} />
+              </Screen>
+            </DCArtboard>
+            <DCArtboard id="login" label="Log in" width={W} height={H}>
+              <Screen>
+                <AuthLoginVariant />
+              </Screen>
+            </DCArtboard>
+          </DCSection>
+
+          <DCSection id="home" title="Home / Capture" subtitle="The primary screen — 5 distinct states. 80% of user time is here.">
+            <DCArtboard id="home-permission" label="01 · Empty" width={W} height={H}>
+              <HomeStatic state="permission_needed" />
+            </DCArtboard>
+            <DCArtboard id="home-ready" label="02 · Ready" width={W} height={H}>
+              <HomeStatic state="ready" />
+            </DCArtboard>
+            <DCArtboard id="home-generating" label="03 · Generating" width={W} height={H}>
+              <HomeStatic state="generating" />
+            </DCArtboard>
+            <DCArtboard id="home-result" label="04 · Result" width={W} height={H}>
+              <HomeStatic state="result" />
+            </DCArtboard>
+            <DCArtboard id="home-result-copied" label="05 · Result · copied" width={W} height={H}>
+              <HomeStatic state="result" flashIdx={1} />
+            </DCArtboard>
+            <DCArtboard id="home-error" label="06 · Error" width={W} height={H}>
+              <HomeStatic state="error" />
+            </DCArtboard>
+          </DCSection>
+
+          <DCSection id="chats" title="Chats" subtitle="Saved chats list + per-chat detail with REPLIES + CONVERSATION sections.">
+            <DCArtboard id="chats-list" label="Chats list" width={W} height={H}>
+              <Screen>
+                <ChatsListScreen onBack={() => {}} onOpenChat={() => {}} />
+              </Screen>
+            </DCArtboard>
+            <DCArtboard id="chats-empty" label="Chats · empty" width={W} height={H}>
+              <Screen>
+                <ChatsListScreen empty onBack={() => {}} />
+              </Screen>
+            </DCArtboard>
+            <DCArtboard id="chat-detail" label="Chat detail" width={W} height={H}>
+              <Screen>
+                <ChatDetailScreen onBack={() => {}} onOpenPaywall={() => {}} />
+              </Screen>
+            </DCArtboard>
+          </DCSection>
+
+          <DCSection id="paywall-settings" title="Paywall & Settings" subtitle="Monetization sheet + account preferences. Required for store compliance: Delete account.">
+            <DCArtboard id="paywall" label="Paywall" width={W} height={H}>
+              <Screen>
+                <div style={{ flex: 1, position: 'relative', background: '#0a0a0f' }}>
+                  {/* Dimmed result behind the sheet */}
+                  <div style={{ position: 'absolute', inset: 0, opacity: 0.35 }}>
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', background: '#0a0a0f', color: '#f5f5f7' }}>
+                      <TopBar quota="Free · 0 left" right={<span style={{ color: '#66e0b4', fontSize: 15 }}>Chats</span>} />
+                      <ResultViewStatic />
+                    </div>
+                  </div>
+                  <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.6)' }} />
+                  <PaywallSheet open onDismiss={() => {}} />
+                </div>
+              </Screen>
+            </DCArtboard>
+            <DCArtboard id="paywall-midgen" label="Paywall · mid-generation" width={W} height={H}>
+              <Screen>
+                <HomePaywallMidGen />
+              </Screen>
+            </DCArtboard>
+            <DCArtboard id="settings" label="Settings" width={W} height={H}>
+              <Screen>
+                <SettingsScreen onBack={() => {}} />
+              </Screen>
+            </DCArtboard>
+          </DCSection>
+
+          <DCSection id="edge" title="Edge cases" subtitle="The states that make or break a real-world product. Friendly, never scary.">
+            <DCArtboard id="no-internet" label="No internet" width={W} height={H}>
+              <Screen>
+                <HomeNoInternet />
+              </Screen>
+            </DCArtboard>
+            <DCArtboard id="server-down" label="Server down" width={W} height={H}>
+              <Screen>
+                <HomeServerDown />
+              </Screen>
+            </DCArtboard>
+            <DCArtboard id="permission-denied" label="Photo permission denied" width={W} height={H}>
+              <Screen>
+                <HomePermissionDenied />
+              </Screen>
+            </DCArtboard>
+            <DCArtboard id="timeout" label="Generation timeout" width={W} height={H}>
+              <Screen>
+                <HomeTimeout />
+              </Screen>
+            </DCArtboard>
+            <DCArtboard id="unclear" label="Unclear screenshot" width={W} height={H}>
+              <Screen>
+                <HomeUnclear />
+              </Screen>
+            </DCArtboard>
+            <DCArtboard id="push" label="Push notification" width={W} height={H}>
+              <Screen>
+                <PushNotification />
+              </Screen>
+            </DCArtboard>
+          </DCSection>
+        </DesignCanvas>
+      );
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Static onboarding slide (for canvas — no state)
+    // ─────────────────────────────────────────────────────────────
+    function OnboardingStaticSlide({ step }) {
+      const slides = [
+        { h: 'Stuck on what to say?', s: 'Wingman writes the perfect reply in 3 seconds.' },
+        { h: 'Just take a screenshot', s: 'We read your chat and generate 5 angles, instantly.' },
+        { h: 'Tap to copy. Paste. Win.', s: '10 free replies to start. No credit card.' },
+      ];
+      const slide = slides[step];
+      const last = step === 2;
+      return (
+        <div style={{
+          flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
+          background: '#0a0a0f', color: '#f5f5f7',
+          backgroundImage: 'radial-gradient(70% 40% at 50% 0%, rgba(102,224,180,0.10), transparent 70%)',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '16px 20px' }}>
+            <span style={{ color: '#9494a3', fontSize: 15, fontWeight: 600 }}>Skip</span>
+          </div>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '0 32px', textAlign: 'center', gap: 32 }}>
+            {step === 0 && <FrozenChatIllo />}
+            {step === 1 && <FlowDiagramIllo />}
+            {step === 2 && <CopyDemoIllo />}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 320 }}>
+              <h1 style={{ fontSize: 28, fontWeight: 700, margin: 0, letterSpacing: '-0.02em', lineHeight: 1.2 }}>{slide.h}</h1>
+              <p style={{ color: '#9494a3', fontSize: 15, margin: 0, lineHeight: 1.45 }}>{slide.s}</p>
+            </div>
+          </div>
+          <div style={{ padding: '0 24px 32px', display: 'flex', flexDirection: 'column', gap: 24 }}>
+            <div style={{ display: 'flex', justifyContent: 'center', gap: 8 }}>
+              {[0,1,2].map(i => (
+                <div key={i} style={{
+                  width: i === step ? 20 : 6, height: 6, borderRadius: 3,
+                  background: i === step ? '#66e0b4' : '#5f5f6e',
+                }} />
+              ))}
+            </div>
+            <div style={{
+              width: '100%', padding: '16px', borderRadius: 16,
+              background: '#66e0b4', color: '#0a0a0f', fontSize: 17, fontWeight: 700,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+            }}>{last ? 'Get started' : 'Next'}</div>
+          </div>
+        </div>
+      );
+    }
+
+    function FrozenChatIllo() {
+      return (
+        <div style={{ width: 240, padding: 16, background: '#13131c', borderRadius: 16, border: '1px solid #2a2a3a', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ height: 18, width: '70%', background: '#1a1a25', borderRadius: 9 }} />
+          <div style={{ height: 18, width: '85%', background: '#1a1a25', borderRadius: 9 }} />
+          <div style={{ height: 18, width: '50%', background: 'rgba(102,224,180,0.18)', borderRadius: 9, alignSelf: 'flex-end' }} />
+          <div style={{ height: 18, width: '65%', background: '#1a1a25', borderRadius: 9 }} />
+          <div style={{ height: 40, marginTop: 8, border: '1.5px dashed #5f5f6e', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#5f5f6e', fontSize: 13 }}>typing…</div>
+        </div>
+      );
+    }
+    function FlowDiagramIllo() {
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+          <div style={{ width: 96, height: 156, background: '#13131c', borderRadius: 14, border: '1px solid #2a2a3a' }} />
+          <span style={{ color: '#66e0b4', fontSize: 32 }}>→</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {[0,1,2,3,4].map(i => (
+              <div key={i} style={{ width: 96, height: 26, background: '#13131c', borderRadius: 6, border: '1px solid #2a2a3a' }} />
+            ))}
+          </div>
+        </div>
+      );
+    }
+    function CopyDemoIllo() {
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: 260 }}>
+          <div style={{ background: '#13131c', border: '2px solid #66e0b4', borderRadius: 14, padding: 14, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#b36bff' }}>PLAYFUL</span>
+              <span style={{ fontSize: 12, color: '#66e0b4', fontWeight: 600 }}>Copied ✓</span>
+            </div>
+            <div style={{ fontSize: 14, color: '#f5f5f7', textAlign: 'left' }}>Busy is a personality trait now? Bold of you.</div>
+          </div>
+          <div style={{ alignSelf: 'flex-end', background: 'rgba(102,224,180,0.18)', color: '#66e0b4', padding: '8px 12px', borderRadius: 14, fontSize: 14 }}>Busy is a personality trait now? Bold of you.</div>
+        </div>
+      );
+    }
+
+    function AuthLoginVariant() {
+      const [tick, setTick] = React.useState(0);
+      // Render AuthScreen but flip its state to 'login' on first paint
+      const ref = React.useRef(null);
+      React.useEffect(() => {
+        // toggle to login mode by clicking the toggle link
+        if (!ref.current) return;
+        const span = ref.current.querySelector('span[style*="cursor: pointer"]');
+      }, []);
+      // Easier: render a custom log-in version directly to avoid timing
+      return (
+        <div ref={ref} style={{
+          flex: 1, minHeight: 0, overflowY: 'auto',
+          background: '#0a0a0f', color: '#f5f5f7',
+          backgroundImage: 'radial-gradient(80% 50% at 50% -10%, rgba(102,224,180,0.08), transparent 70%)',
+          display: 'flex', flexDirection: 'column',
+        }}>
+          <div style={{ padding: '64px 24px 32px', display: 'flex', flexDirection: 'column', gap: 32 }}>
+            <div style={{ color: '#66e0b4', fontSize: 28, fontWeight: 700, letterSpacing: '-0.02em' }}>Wingman</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <h1 style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.02em', lineHeight: 1.2, margin: 0 }}>Welcome back.</h1>
+              <p style={{ color: '#9494a3', fontSize: 15, lineHeight: 1.4, margin: 0 }}>Pick up where you left off.</p>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <input type="email" placeholder="you@email.com" defaultValue="alex@hey.com" style={{ width: '100%', padding: '14px 16px', background: '#13131c', border: '1px solid #66e0b4', boxShadow: '0 0 0 4px rgba(102,224,180,0.12)', borderRadius: 10, color: '#f5f5f7', fontSize: 15, outline: 'none', boxSizing: 'border-box' }} />
+              <input type="password" placeholder="Password" style={{ width: '100%', padding: '14px 16px', background: '#13131c', border: '1px solid #2a2a3a', borderRadius: 10, color: '#f5f5f7', fontSize: 15, outline: 'none', boxSizing: 'border-box' }} />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <PrimaryButton>Log in</PrimaryButton>
+              <div style={{ textAlign: 'center', fontSize: 15 }}>
+                <span style={{ color: '#9494a3' }}>New here? </span>
+                <span style={{ color: '#66e0b4', fontWeight: 600 }}>Sign up</span>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <span style={{ color: '#9494a3', fontSize: 15, fontWeight: 600 }}>Forgot password</span>
+              </div>
+            </div>
+          </div>
+          <div style={{ marginTop: 'auto', padding: '16px 24px 32px', textAlign: 'center' }}>
+            <p style={{ color: '#5f5f6e', fontSize: 12, lineHeight: 1.5, margin: 0 }}>
+              By continuing you agree to the <span style={{ color: '#9494a3', fontWeight: 600 }}>Terms of Service</span> and <span style={{ color: '#9494a3', fontWeight: 600 }}>Privacy Policy</span>.
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

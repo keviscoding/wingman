@@ -43,7 +43,9 @@ import {
 } from "../components/ui";
 import { NewScreenshotBanner } from "../components/NewScreenshotBanner";
 import { ModeToggle } from "../components/ModeToggle";
-import { enqueueJob, useHasUnseen, useRunningCount } from "../lib/genQueue";
+import { ChatsPill } from "../components/ChatsPill";
+import { RecentRail } from "../components/RecentRail";
+import { enqueueJob, useRunningCount } from "../lib/genQueue";
 import { useMode } from "../lib/modeStore";
 import { setProcessedScreenshotId } from "../lib/screenshotWatcher";
 
@@ -60,7 +62,6 @@ export default function HomeScreen() {
   const router = useRouter();
   const [phase, setPhase] = useState<Phase>({ kind: "init" });
   const runningCount = useRunningCount();
-  const hasUnseen = useHasUnseen();
   const [mode, setMode] = useMode();
   const lastProcessedIdRef = useRef<string | null>(null);
   const scanInFlight = useRef(false);
@@ -172,35 +173,7 @@ export default function HomeScreen() {
         right={
           <>
             <QuotaBadge me={me} />
-            <Pressable onPress={() => router.push("/chats")}>
-              <View
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: 6,
-                }}
-              >
-                <Text
-                  style={{
-                    color: theme.accent,
-                    fontSize: theme.fontSizes.md,
-                    fontWeight: theme.fontWeights.semibold,
-                  }}
-                >
-                  Chats
-                </Text>
-                {hasUnseen ? (
-                  <View
-                    style={{
-                      width: 8,
-                      height: 8,
-                      borderRadius: 4,
-                      backgroundColor: theme.accent,
-                    }}
-                  />
-                ) : null}
-              </View>
-            </Pressable>
+            <ChatsPill onPress={() => router.push("/chats")} />
             <Pressable onPress={() => router.push("/settings")}>
               <View
                 style={{
@@ -253,6 +226,20 @@ export default function HomeScreen() {
         }}
         keyboardShouldPersistTaps="handled"
       >
+        {/* Recent chats rail — present on every idle state so users can
+            jump back into a chat without leaving the home flow. */}
+        {phase.kind !== "init" ? (
+          <RecentRail
+            onSeeAll={() => router.push("/chats")}
+            onOpenChat={(c) =>
+              router.push({
+                pathname: "/chat/[id]",
+                params: { id: c.id, contact: c.contact },
+              })
+            }
+          />
+        ) : null}
+
         {phase.kind === "init" && <InitView />}
 
         {phase.kind === "permission_denied" && (

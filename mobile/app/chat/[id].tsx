@@ -143,8 +143,12 @@ export default function ChatDetailScreen() {
   const prettyDetail = (d: string) => {
     if (d === "no_replies_produced")
       return "Couldn't read that screenshot clearly. Try a sharper one.";
-    if (d.startsWith("network:"))
-      return "No internet. Check your connection.";
+    if (d === "chat_not_found")
+      return "This chat is no longer available.";
+    if (d === "generation_failed")
+      return "Generation hit a snag. Try again — different chats sometimes succeed where one stalls.";
+    if (d.startsWith("network:") || /network/i.test(d))
+      return "Couldn't reach Wingman. Check your connection and try again.";
     if (d === "request_failed") return "Server hiccup. Try again in a sec.";
     return d;
   };
@@ -247,16 +251,35 @@ export default function ChatDetailScreen() {
             <ActivityIndicator color={theme.accent} size="large" />
           </View>
         ) : error ? (
-          <Text
+          <View
             style={{
-              color: theme.error,
-              fontSize: theme.fontSizes.md,
-              textAlign: "center",
+              alignItems: "center",
+              gap: theme.spacing.md,
               marginTop: 40,
+              paddingHorizontal: theme.spacing.lg,
             }}
           >
-            {error}
-          </Text>
+            <Text
+              style={{
+                color: theme.error,
+                fontSize: theme.fontSizes.md,
+                textAlign: "center",
+              }}
+            >
+              {prettyDetail(error)}
+            </Text>
+            <Pressable onPress={() => load(true)}>
+              <Text
+                style={{
+                  color: theme.accent,
+                  fontSize: theme.fontSizes.md,
+                  fontWeight: theme.fontWeights.semibold,
+                }}
+              >
+                Retry
+              </Text>
+            </Pressable>
+          </View>
         ) : data ? (
           <View style={{ gap: theme.spacing.lg }}>
             {/* REPLIES SECTION */}

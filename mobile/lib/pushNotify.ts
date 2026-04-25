@@ -87,3 +87,34 @@ export async function primeNotifications() {
   if (!notif) return;
   await ensurePermission();
 }
+
+/** Resolve the device's Expo Push Token (ExponentPushToken[...]).
+ *  We send this to our backend so the SERVER can fire notifications
+ *  via Expo's Push API even when the app is suspended in background.
+ *  Returns null if expo-notifications isn't bundled or permission
+ *  was denied. */
+export async function getExpoPushToken(): Promise<string | null> {
+  load();
+  if (!notif) return null;
+  await ensurePermission();
+  try {
+    // Android: ensure default channel so notifications actually appear
+    if (notif.setNotificationChannelAsync) {
+      await notif.setNotificationChannelAsync("default", {
+        name: "Wingman replies",
+        importance: notif.AndroidImportance?.DEFAULT ?? 3,
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: "#66e0b4",
+      });
+    }
+    const r = await notif.getExpoPushTokenAsync({
+      // EAS project ID is read from app.json automatically; this also
+      // works in classic builds.
+      projectId: "48c58bd6-8026-416d-b830-aa37bfa4fe7f",
+    });
+    return r?.data || null;
+  } catch (e) {
+    if (__DEV__) console.warn("[push] getExpoPushTokenAsync failed:", e);
+    return null;
+  }
+}

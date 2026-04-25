@@ -145,6 +145,25 @@ class MeResponse(BaseModel):
     paid_daily_limit: int = db.PAID_DAILY_LIMIT
 
 
+class PushTokenRequest(BaseModel):
+    token: str | None = None
+
+
+@router.post("/me/push-token")
+async def register_push_token(
+    body: PushTokenRequest,
+    user: Annotated[dict, Depends(current_user)],
+):
+    """Mobile reports its Expo Push Token here on every app launch.
+    We persist it on the user row; subsequent generation completions
+    fire a push to whichever device last reported.
+
+    Pass `token: null` (or omit) on sign-out to clear it.
+    """
+    db.set_push_token(user["id"], body.token)
+    return {"ok": True}
+
+
 @router.get("/me", response_model=MeResponse)
 async def me(user: Annotated[dict, Depends(current_user)]):
     q = db.get_user_quota_state(user["id"])
@@ -230,6 +249,22 @@ async def quick_capture(
         mode=mode,
     )
 
+    # Fire-and-forget push so users see "Replies ready" even if the
+    # app was backgrounded. Token may be missing on first launch
+    # (mobile registers asynchronously) — that's fine, no-op then.
+    push_token = db.get_push_token(user["id"])
+    if push_token:
+        from .push import fire_and_forget
+        fire_and_forget(
+            push_token,
+            title="Your reply is ready ✓",
+            body=f"5 replies for {result.get('contact', 'your chat')} · tap to copy",
+            data={
+                "chat_id": result["chat_id"],
+                "contact": result.get("contact"),
+            },
+        )
+
     return QuickCaptureResponse(
         chat_id=result["chat_id"],
         contact=result["contact"],
@@ -302,6 +337,18 @@ async def regenerate(
         reply_count=len(result["replies"]),
         mode=mode,
     )
+    push_token = db.get_push_token(user["id"])
+    if push_token:
+        from .push import fire_and_forget
+        fire_and_forget(
+            push_token,
+            title="Fresh replies ready ✓",
+            body=f"New replies for {result.get('contact', 'your chat')} · tap to view",
+            data={
+                "chat_id": result.get("chat_id", chat_id),
+                "contact": result.get("contact"),
+            },
+        )
     return result
 
 

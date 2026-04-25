@@ -29,6 +29,11 @@ export type ChatSummary = {
   last_speaker: string;
   last_activity_at: number;
   has_replies: boolean;
+  // Optional chat metadata enriched server-side (best-effort).
+  // - source: detected platform (hinge/tinder/whatsapp/...)
+  // - last_copied_angle: last reply angle the user copied
+  source?: string | null;
+  last_copied_angle?: string | null;
 };
 
 export type Me = {
@@ -131,6 +136,14 @@ export const api = {
 
   async me(token: string): Promise<Me> {
     return request<Me>("/api/v1/me", { token });
+  },
+
+  async registerPushToken(token: string, expoToken: string | null): Promise<void> {
+    await request("/api/v1/me/push-token", {
+      method: "POST",
+      token,
+      body: JSON.stringify({ token: expoToken }),
+    });
   },
 
   async listChats(token: string): Promise<{ chats: ChatSummary[] }> {

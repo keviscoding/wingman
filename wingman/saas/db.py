@@ -69,7 +69,11 @@ CREATE TABLE IF NOT EXISTS users (
   daily_window_start   INTEGER NOT NULL DEFAULT 0,
   created_at           INTEGER NOT NULL,
   -- nullable: when subscription expires; NULL means free tier
-  subscription_until   INTEGER
+  subscription_until   INTEGER,
+  -- Expo Push Token (ExponentPushToken[...]) — one per user. We fire
+  -- through Expo's Push API whenever a generation completes so the
+  -- notification arrives even when JS is suspended.
+  push_token           TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -115,6 +119,23 @@ def init_db() -> None:
             conn.execute(
                 "ALTER TABLE users ADD COLUMN pro_daily_count INTEGER NOT NULL DEFAULT 0"
             )
+        if "push_token" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN push_token TEXT")
+
+
+def set_push_token(user_id: str, token: str | None) -> None:
+    """Update the device push token for a user. Pass None / empty to
+    clear it (e.g. on sign-out)."""
+    with connect() as conn:
+        conn.execute(
+            "UPDATE users SET push_token = ? WHERE id = ?",
+            (token or None, user_id),
+        )
+
+
+def get_push_token(user_id: str) -> str | None:
+    user = get_user_by_id(user_id)
+    return user.get("push_token") if user else None
 
 
 # ---------------------------------------------------------------------------

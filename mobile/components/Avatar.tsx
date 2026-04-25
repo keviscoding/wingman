@@ -1,44 +1,132 @@
-// Round avatar with a stylized female silhouette. Used in the chats
-// list and chat detail screens. Accepts an optional `uri` for the
-// future user-uploaded picture feature; falls back to the silhouette.
+// Round avatar.
+//
+// Three rendering modes (in priority order):
+//   1. uri          → user-uploaded photo
+//   2. name + tint  → mint-themed monogram with deterministic per-name color
+//   3. silhouette   → final fallback when no name available
+//
+// Optional decorations:
+//   - showDot       → small accent dot top-right ("unread / fresh replies")
+//   - readyRing     → mint outline ring around the whole avatar
+//                     (used when this contact has cached replies waiting)
+//   - unreadCount   → numeric badge top-right ("3" style)
 
 import { Image } from "expo-image";
-import { View } from "react-native";
+import { Text, View } from "react-native";
+import { initials, nameTint } from "../lib/chatTint";
 import { theme } from "../lib/theme";
 
 type Props = {
   size?: number;
   uri?: string | null;
-  // Optional dot overlay (top-right) for "unseen replies" indicator.
+  name?: string | null;
   showDot?: boolean;
+  readyRing?: boolean;
+  unreadCount?: number;
 };
 
-export function Avatar({ size = 44, uri, showDot }: Props) {
+export function Avatar({
+  size = 44,
+  uri,
+  name,
+  showDot,
+  readyRing,
+  unreadCount,
+}: Props) {
+  const hasName = !!name && name.trim().length > 0;
+  const tint = hasName ? nameTint(name as string) : null;
+  const initialsText = hasName ? initials(name as string) : "";
+
   return (
     <View
       style={{
         width: size,
         height: size,
-        borderRadius: size / 2,
-        backgroundColor: theme.surface2,
-        borderWidth: 1,
-        borderColor: theme.border,
-        alignItems: "center",
-        justifyContent: "center",
-        overflow: "hidden",
         position: "relative",
       }}
     >
-      {uri ? (
-        <Image
-          source={{ uri }}
-          style={{ width: size, height: size }}
-          contentFit="cover"
+      {/* Replies-ready ring sits OUTSIDE the avatar to avoid clipping */}
+      {readyRing ? (
+        <View
+          style={{
+            position: "absolute",
+            top: -3,
+            left: -3,
+            right: -3,
+            bottom: -3,
+            borderRadius: (size + 6) / 2,
+            borderWidth: 1.5,
+            borderColor: theme.accent,
+            opacity: 0.55,
+          }}
         />
-      ) : (
-        <Silhouette size={size} />
-      )}
-      {showDot ? (
+      ) : null}
+
+      <View
+        style={{
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          backgroundColor: tint ? tint.bg : theme.surface2,
+          borderWidth: 1,
+          borderColor: theme.border,
+          alignItems: "center",
+          justifyContent: "center",
+          overflow: "hidden",
+        }}
+      >
+        {uri ? (
+          <Image
+            source={{ uri }}
+            style={{ width: size, height: size }}
+            contentFit="cover"
+          />
+        ) : initialsText ? (
+          <Text
+            style={{
+              color: tint ? tint.fg : theme.text,
+              fontSize: size < 32 ? 11 : 16,
+              fontWeight: theme.fontWeights.bold,
+              letterSpacing: -0.2,
+            }}
+          >
+            {initialsText}
+          </Text>
+        ) : (
+          <Silhouette size={size} />
+        )}
+      </View>
+
+      {/* Numeric unread badge — overrides plain dot */}
+      {unreadCount && unreadCount > 0 ? (
+        <View
+          style={{
+            position: "absolute",
+            top: -2,
+            right: -2,
+            minWidth: 18,
+            height: 18,
+            paddingHorizontal: 5,
+            borderRadius: 9,
+            backgroundColor: theme.accent,
+            alignItems: "center",
+            justifyContent: "center",
+            borderWidth: 2,
+            borderColor: theme.bg,
+          }}
+        >
+          <Text
+            style={{
+              color: theme.bg,
+              fontSize: 11,
+              fontWeight: theme.fontWeights.bold,
+              lineHeight: 12,
+            }}
+          >
+            {unreadCount}
+          </Text>
+        </View>
+      ) : showDot ? (
         <View
           style={{
             position: "absolute",
@@ -58,33 +146,12 @@ export function Avatar({ size = 44, uri, showDot }: Props) {
 }
 
 function Silhouette({ size }: { size: number }) {
-  // Female-presenting outline rendered as plain Views — no SVG dep,
-  // scales cleanly with the parent. Hair is a soft arc over the head.
+  // Light fallback for when neither uri nor name is available.
+  // Same shape as before — kept understated.
   const head = size * 0.28;
-  const hair = size * 0.42;
   const shoulders = size * 0.74;
-  const center = size / 2;
   return (
-    <View
-      style={{
-        width: size,
-        height: size,
-        backgroundColor: "transparent",
-      }}
-    >
-      {/* Hair ring (soft arc behind the head) */}
-      <View
-        style={{
-          position: "absolute",
-          top: size * 0.12,
-          left: (size - hair) / 2,
-          width: hair,
-          height: hair,
-          borderRadius: hair / 2,
-          backgroundColor: "rgba(102,224,180,0.18)",
-        }}
-      />
-      {/* Head */}
+    <View style={{ width: size, height: size }}>
       <View
         style={{
           position: "absolute",
@@ -96,7 +163,6 @@ function Silhouette({ size }: { size: number }) {
           backgroundColor: theme.dim,
         }}
       />
-      {/* Shoulders / body — bottom rounded rectangle clipped by overflow */}
       <View
         style={{
           position: "absolute",
@@ -106,29 +172,6 @@ function Silhouette({ size }: { size: number }) {
           height: shoulders,
           borderRadius: shoulders / 2,
           backgroundColor: theme.dim,
-        }}
-      />
-      {/* Subtle hair lock left + right */}
-      <View
-        style={{
-          position: "absolute",
-          top: size * 0.16,
-          left: center - hair / 2 + 1,
-          width: hair * 0.18,
-          height: hair * 0.55,
-          borderRadius: 999,
-          backgroundColor: "rgba(102,224,180,0.18)",
-        }}
-      />
-      <View
-        style={{
-          position: "absolute",
-          top: size * 0.16,
-          right: center - hair / 2 + 1,
-          width: hair * 0.18,
-          height: hair * 0.55,
-          borderRadius: 999,
-          backgroundColor: "rgba(102,224,180,0.18)",
         }}
       />
     </View>

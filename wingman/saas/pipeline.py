@@ -105,6 +105,16 @@ def record_reply_copy(ctx: UserContext, chat_id: str, label: str, text: str) -> 
     }
     with log_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    # Stash on the chat meta so the chats list can show "last copied:
+    # BOLD" — quick visual recall of which tone the user picked last.
+    try:
+        store = _user_chat_store(ctx)
+        meta = store.load_meta(chat_id)
+        meta["last_copied_angle"] = label
+        meta["last_copied_at"] = int(time.time())
+        store.save_meta(chat_id, meta)
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +140,11 @@ def list_chats_for_user(ctx: UserContext) -> dict:
         if msgs:
             last_text = (msgs[-1].get("text") or "")[:120]
             last_speaker = msgs[-1].get("speaker", "")
+        # Best-effort enrichment from chat meta. These were populated
+        # by recent quick-capture / reply-copy events; if absent we
+        # just send null and the mobile UI hides the badge.
+        source = meta.get("source")
+        last_copied_angle = meta.get("last_copied_angle")
         out.append({
             "id": c,
             "contact": c,
@@ -138,6 +153,8 @@ def list_chats_for_user(ctx: UserContext) -> dict:
             "last_speaker": last_speaker,
             "last_activity_at": meta.get("last_activity_at", 0),
             "has_replies": bool(meta.get("last_replies")),
+            "source": source,
+            "last_copied_angle": last_copied_angle,
         })
     out.sort(key=lambda d: d["last_activity_at"], reverse=True)
     return {"chats": out}
