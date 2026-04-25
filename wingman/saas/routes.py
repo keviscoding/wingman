@@ -337,3 +337,57 @@ async def reply_copied(
     from .pipeline import record_reply_copy
     record_reply_copy(get_context(user["id"]), chat_id, body.label, body.text)
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Admin (operator-only) — granting Pro to test / friends-and-family accounts
+# ---------------------------------------------------------------------------
+
+class AdminUpgradeRequest(BaseModel):
+    email: EmailStr
+    days: int = 365
+
+
+def _admin_token(authorization: Annotated[str | None, Header()] = None) -> str | None:
+    """Same Bearer token format as user auth, but checked against
+    WINGMAN_ADMIN_TOKEN env var instead of the user JWT."""
+    if not authorization:
+        return None
+    parts = authorization.split(None, 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return None
+    return parts[1].strip()
+
+
+def require_admin(authorization: Annotated[str | None, Header()] = None):
+    import os
+    expected = (os.getenv("WINGMAN_ADMIN_TOKEN") or "").strip()
+    if not expected:
+        raise HTTPException(status_code=503, detail="admin_disabled")
+    token = _admin_token(authorization)
+    if not token or token != expected:
+        raise HTTPException(status_code=401, detail="bad_admin_token")
+    return True
+
+
+@router.post("/admin/upgrade")
+async def admin_upgrade(
+    body: AdminUpgradeRequest,
+    _admin: Annotated[bool, Depends(require_admin)],
+):
+    """Grant a user a Pro subscription for ``days`` days.
+
+    Use sparingly — for comp accounts, beta testers, refunded users.
+    Auth is a single shared token in WINGMAN_ADMIN_TOKEN; rotate it
+    periodically.
+    """
+    user = db.get_user_by_email(body.email)
+    if not user:
+        raise HTTPException(status_code=404, detail="user_not_found")
+    until = int(time.time()) + body.days * 24 * 3600
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE users SET plan = 'pro', subscription_until = ? WHERE id = ?",
+            (until, user["id"]),
+        )
+    return {"ok": True, "email": body.email, "subscription_until": until}
