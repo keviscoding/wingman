@@ -65,6 +65,18 @@ export default function HomeScreen() {
   const [mode, setMode] = useMode();
   const lastProcessedIdRef = useRef<string | null>(null);
   const scanInFlight = useRef(false);
+  // Ref-based handle on `startGeneration` so scan() always invokes
+  // the LATEST closure (with the latest mode). Without this, scan
+  // captured the first render's startGeneration via a memoized
+  // closure with empty deps — switching mode silently kept the old
+  // version active, which broke auto-detect after a mode toggle.
+  const startGenerationRef = useRef<
+    (
+      shot:
+        | RecentScreenshot
+        | { uri: string; filename: string; id: string | null },
+    ) => void
+  >(() => {});
 
   /* ─────────────── Scan for the most recent screenshot ─────────────── */
 
@@ -84,9 +96,9 @@ export default function HomeScreen() {
         found.id !== lastProcessedIdRef.current &&
         found.ageSeconds <= AUTO_FIRE_MAX_AGE_S
       ) {
-        startGeneration(found);
-        // After auto-fire, surface the home as "ready" so the user can
-        // queue another. The dock chip handles progress.
+        // Always reach for the latest startGeneration via the ref so
+        // mode changes propagate immediately, with no stale closure.
+        startGenerationRef.current(found);
         setPhase({ kind: "ready", screenshot: found });
         return;
       }
@@ -124,6 +136,11 @@ export default function HomeScreen() {
     },
     [token, refreshMe, mode],
   );
+
+  // Keep the ref pointing at whatever startGeneration is fresh.
+  useEffect(() => {
+    startGenerationRef.current = startGeneration;
+  }, [startGeneration]);
 
   /* ─────────────── Manual pick fallback ─────────────── */
 

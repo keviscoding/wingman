@@ -65,18 +65,22 @@ async function scanAndNotify() {
       notify(null);
       return;
     }
-    // RACE FIX: if this screenshot is fresh enough that the home
-    // screen's auto-fire might claim it, hold the banner for a short
-    // window. If home's scan() ends up enqueueing, it'll call
+    // RACE FIX: when a screenshot is fresh enough that the home
+    // screen's auto-fire might claim it, defer the banner so home
+    // wins. If home's scan() ends up enqueueing, it'll call
     // setProcessedScreenshotId which immediately notifies(null) and
     // wipes the banner. If it doesn't, we surface the banner after
     // the grace period.
+    //
+    // 1500ms (was 600ms) — a tighter window was losing the race on
+    // slower phones / when getMostRecentScreenshot took longer than
+    // usual (e.g. just after MediaLibrary had to refresh its index).
     if (s.ageSeconds <= AUTO_FIRE_MAX_AGE_S) {
       setTimeout(() => {
         if (s.id === processedId) return; // home claimed it
         if (s.id === dismissedId) return;
         notify(s);
-      }, 600);
+      }, 1500);
       return;
     }
     notify(s);
