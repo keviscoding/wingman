@@ -16,6 +16,7 @@
 import { useEffect, useState } from "react";
 import { api, ApiError, GenerationMode, QuickCaptureResult } from "./api";
 import { cacheRecentResult } from "./recentResult";
+import { openPaywall } from "./paywallStore";
 import { firePushReady } from "./pushNotify";
 
 export type Job = {
@@ -112,6 +113,15 @@ async function runJob(token: string, job: Job, refreshMe?: () => void) {
     firePushReady(result.contact || "your chat");
   } catch (e: any) {
     const detail = e instanceof ApiError ? e.detail : "request_failed";
+    // Quota gates → fire the global paywall sheet so the user has a
+    // direct path to fix it, rather than staring at a dock chip error.
+    if (
+      detail === "pro_locked_free" ||
+      detail === "daily_cap_free" ||
+      detail === "lifetime_trial_exhausted"
+    ) {
+      openPaywall(detail);
+    }
     jobs = jobs.map((j) =>
       j.id === job.id
         ? { ...j, status: "error" as const, errorDetail: detail }

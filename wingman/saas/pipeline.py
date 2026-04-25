@@ -343,6 +343,9 @@ async def _generate_pro_for_user_messages(
     last_err = None
     for attempt in range(max(1, len(_ALL_KEYS))):
         try:
+            # 50s ceiling — DO's load-balancer kills the request at ~60s
+            # and serves an HTML 502 page that the mobile app can't parse
+            # ("Couldn't regenerate"). Bail with a clean JSON error first.
             resp = await asyncio.wait_for(
                 asyncio.to_thread(
                     client.models.generate_content,
@@ -350,7 +353,7 @@ async def _generate_pro_for_user_messages(
                     contents=user_prompt,
                     config=config,
                 ),
-                timeout=60,
+                timeout=50,
             )
             raw = (resp.text or "").strip()
             if not raw:
@@ -423,19 +426,34 @@ async def _generate_for_user_messages(
     msg_dicts = [
         {"speaker": m.speaker, "text": m.text} for m in messages
     ]
-    raw = await generate_tuned_replies_json(
-        msg_dicts,
-        goal="",
-        extra_context=extra_context,
-        on_chunk=None,
-        timeout_s=20,
-    )
+    # Tuned can fail at runtime even when configured: Vertex auth bad,
+    # endpoint quota, model warm-up timeout. Catch everything and fall
+    # back to Pro rather than serving an empty 502 to the user.
+    try:
+        raw = await generate_tuned_replies_json(
+            msg_dicts,
+            goal="",
+            extra_context=extra_context,
+            on_chunk=None,
+            timeout_s=20,
+        )
+    except Exception as exc:
+        print(f"[saas-pipeline] tuned errored ({exc}) — falling back to pro")
+        return await _generate_pro_for_user_messages(
+            ctx, messages, extra_context=extra_context,
+        )
     if not raw.strip():
-        return [], "", "", f"tuned-{get_active_version()}-empty", 0.0
+        print("[saas-pipeline] tuned returned empty — falling back to pro")
+        return await _generate_pro_for_user_messages(
+            ctx, messages, extra_context=extra_context,
+        )
     try:
         data = json.loads(raw)
     except Exception:
-        return [], "", "", f"tuned-{get_active_version()}-badjson", 0.0
+        print("[saas-pipeline] tuned returned non-JSON — falling back to pro")
+        return await _generate_pro_for_user_messages(
+            ctx, messages, extra_context=extra_context,
+        )
     replies = [
         {
             "label": r.get("label", "option"),
@@ -445,9 +463,14 @@ async def _generate_for_user_messages(
         for r in (data.get("replies") or [])
         if r.get("text")
     ]
+    if not replies:
+        print("[saas-pipeline] tuned produced 0 valid replies — falling back to pro")
+        return await _generate_pro_for_user_messages(
+            ctx, messages, extra_context=extra_context,
+        )
     # Rough cost estimate — 5 calls × ~600 input + 80 output tokens at
-    # 2.5 Flash pricing. Not exact; good enough for margin tracking.
-    cost_cents = 0.05  # ~$0.0005 per call -> ~$0.0025 per generation
+    # 2.5 Flash pricing.
+    cost_cents = 0.05
     return (
         replies,
         data.get("read", ""),

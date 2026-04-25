@@ -3,8 +3,10 @@ import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
 import { View } from "react-native";
 import { GenerationDock } from "../components/GenerationDock";
+import { PaywallSheet } from "../components/PaywallSheet";
 import { AuthProvider, useAuth } from "../lib/auth";
 import { useOnboardingSeen } from "../lib/onboardingState";
+import { dismissPaywall, usePaywallSignal } from "../lib/paywallStore";
 import { theme } from "../lib/theme";
 
 function AuthGate() {
@@ -51,9 +53,40 @@ export default function RootLayout() {
             animation: "fade",
           }}
         />
-        {/* Mounted at root so it persists across screen transitions. */}
+        {/* Mounted at root so they persist across screen transitions. */}
         <GenerationDock />
+        <RootPaywall />
       </View>
     </AuthProvider>
+  );
+}
+
+function RootPaywall() {
+  const reason = usePaywallSignal();
+  return (
+    <PaywallSheet
+      visible={!!reason}
+      onDismiss={dismissPaywall}
+      onSubscribe={dismissPaywall}
+      pretitle={reason === "pro_locked_free" ? "PRO TRIAL USED" : undefined}
+      title={
+        reason === "pro_locked_free"
+          ? "Out of Pro generations"
+          : reason === "daily_cap_free"
+            ? "Daily limit reached"
+            : reason === "lifetime_trial_exhausted"
+              ? "Free trial complete"
+              : "Upgrade to Pro"
+      }
+      subtitle={
+        reason === "pro_locked_free"
+          ? "Pro is paid-only after the 2 free trials. Upgrade to keep going."
+          : reason === "daily_cap_free"
+            ? "Free users get a few replies per day. Upgrade to remove the cap."
+            : reason === "lifetime_trial_exhausted"
+              ? "You've used all free generations. Upgrade for unlimited."
+              : "Get unlimited replies, both Fast and Pro modes. Cancel anytime."
+      }
+    />
   );
 }

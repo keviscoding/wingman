@@ -41,7 +41,6 @@ import {
   TopBar,
   QuotaBadge,
 } from "../components/ui";
-import { PaywallSheet } from "../components/PaywallSheet";
 import { NoInternetBanner } from "../components/Banners";
 import { NewScreenshotBanner } from "../components/NewScreenshotBanner";
 import { ModeToggle } from "../components/ModeToggle";
@@ -62,7 +61,6 @@ export default function HomeScreen() {
   const { token, me, signOut, refreshMe } = useAuth();
   const router = useRouter();
   const [phase, setPhase] = useState<Phase>({ kind: "init" });
-  const [paywallOpen, setPaywallOpen] = useState(false);
   const online = useOnlineStatus();
   const runningCount = useRunningCount();
   const hasUnseen = useHasUnseen();
@@ -291,12 +289,6 @@ export default function HomeScreen() {
           />
         )}
       </ScrollView>
-
-      <PaywallSheet
-        visible={paywallOpen}
-        onDismiss={() => setPaywallOpen(false)}
-        onSubscribe={() => setPaywallOpen(false)}
-      />
     </SafeAreaView>
   );
 }

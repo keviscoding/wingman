@@ -16,6 +16,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { api, ApiError, ReplyOption } from "../../lib/api";
 import { useAuth } from "../../lib/auth";
 import { markChatSeen, useUnseenChats } from "../../lib/genQueue";
+import { openPaywall } from "../../lib/paywallStore";
 import { takeCachedResult } from "../../lib/recentResult";
 import { theme, Angle } from "../../lib/theme";
 import {
@@ -124,13 +125,28 @@ export default function ChatDetailScreen() {
       setExtra("");
       setShowExtra(false);
     } catch (e: any) {
-      Alert.alert(
-        "Couldn't regenerate",
-        e instanceof ApiError ? e.detail : "Try again.",
-      );
+      const detail = e instanceof ApiError ? e.detail : "request_failed";
+      if (
+        detail === "pro_locked_free" ||
+        detail === "daily_cap_free" ||
+        detail === "lifetime_trial_exhausted"
+      ) {
+        openPaywall(detail);
+      } else {
+        Alert.alert("Couldn't regenerate", prettyDetail(detail));
+      }
     } finally {
       setRegenerating(false);
     }
+  };
+
+  const prettyDetail = (d: string) => {
+    if (d === "no_replies_produced")
+      return "Couldn't read that screenshot clearly. Try a sharper one.";
+    if (d.startsWith("network:"))
+      return "No internet. Check your connection.";
+    if (d === "request_failed") return "Server hiccup. Try again in a sec.";
+    return d;
   };
 
   const trackCopy = (label: string, text: string) => {
