@@ -31,4 +31,6 @@ ENV WINGMAN_SAAS_DB=/app/data/saas/wingman.sqlite3 \
 EXPOSE 8000
 
 # Honor the platform-supplied PORT; fall back to 8000 for local docker.
-CMD ["sh", "-c", "uvicorn server.app:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# server.saas_app is a slim entry point that only mounts the /api/v1
+# routes — no desktop OpenCV/mss/pyobjc imports.
+CMD ["sh", "-c", "uvicorn server.saas_app:app --host 0.0.0.0 --port ${PORT:-8000}"]
