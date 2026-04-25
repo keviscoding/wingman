@@ -225,6 +225,7 @@ async def quick_capture_for_user(
     if mode == "pro":
         replies, read, advice, model_tag, cost = await _generate_pro_for_user_messages(
             ctx, conv.messages, extra_context=extra_context,
+            img_bytes=img_bytes,
         )
     else:
         replies, read, advice, model_tag, cost = await _generate_for_user_messages(
@@ -310,105 +311,165 @@ async def _generate_pro_for_user_messages(
     ctx: UserContext,
     messages: list[Message],
     extra_context: str = "",
+    img_bytes: bytes | None = None,
 ) -> tuple[list[dict], str, str, str, float]:
     """High-quality path. Calls Gemini 3.1 Pro with the full reply
-    system prompt + Master Playbook injected as system instruction,
-    same shape as the desktop personal app's pro path.
+    system prompt + Master Playbook injected as system instruction.
 
-    Slower than tuned Flash (~10-15s) but the response quality is
-    noticeably stronger on nuanced / longer chats. Paid-only on the
-    SaaS frontend with a small free trial gate.
+    Quality features ported from the desktop personal-mode pipeline:
+      - **Multimodal**: when the original screenshot bytes are
+        available (quick-capture flow), they're attached so Pro sees
+        the actual UI — timestamps, profile pics, vibe, etc. The
+        transcript-only fallback is used for regenerate (no image).
+      - **Safety retry**: if Gemini blocks the first call with
+        PROHIBITED_CONTENT (common on explicit chats), retry with
+        REPLY_SYSTEM_PROMPT_SAFE — same JSON output, reframed as
+        "analyze" rather than "give me replies to send".
+      - **Time context**: "now" timestamp injected so the model
+        understands recency / how long since the last message.
+      - **Permissive safety settings**: BLOCK_NONE for adult content
+        categories, since Wingman's domain is explicit dating banter.
     """
     from wingman.config import (
-        PRO_MODEL, REPLY_SYSTEM_PROMPT, make_genai_client, rotate_api_key,
+        PRO_MODEL, REPLY_SYSTEM_PROMPT, REPLY_SYSTEM_PROMPT_SAFE,
+        make_genai_client, rotate_api_key,
         permissive_safety_settings, _ALL_KEYS,
     )
     from wingman.training_rag import TrainingRAG
     from google.genai import types as gtypes
+    from datetime import datetime
 
     transcript = _format_transcript(messages)
-    user_prompt = REPLY_SYSTEM_PROMPT.format(transcript=transcript)
-    if extra_context.strip():
-        user_prompt += f"\n\nExtra context from the user:\n{extra_context.strip()}"
+
+    def build_user_prompt(safe: bool) -> str:
+        prompt_template = REPLY_SYSTEM_PROMPT_SAFE if safe else REPLY_SYSTEM_PROMPT
+        out = prompt_template.format(transcript=transcript)
+        # Time context — useful for "she replied 3 days ago, what's
+        # the right cadence" type reasoning.
+        now = datetime.now().strftime("%A %B %d, %Y at %I:%M %p")
+        out += f"\n\nCurrent date/time: {now}."
+        if extra_context.strip():
+            out += f"\n\nExtra context from the user:\n{extra_context.strip()}"
+        return out
 
     # System instruction: Master Playbook (the condensed wisdom from
-    # 121 training transcripts). Lazily loaded + cached at process
-    # level so we pay the cost once.
+    # 121 training transcripts).
     system_instr = ""
     try:
         rag = TrainingRAG()
         rag.load()
         system_instr = (rag.knowledge_summary or "").strip()
     except Exception as exc:
-        # Degrade gracefully — Pro is still high quality without it.
         print(f"[saas-pipeline] playbook load failed: {exc}")
 
-    client = make_genai_client()
-    config_kwargs = {
-        "temperature": 0.85,
-        "max_output_tokens": 8192,
-        "response_mime_type": "application/json",
-    }
-    if system_instr:
-        config_kwargs["system_instruction"] = system_instr
-    try:
-        config_kwargs["safety_settings"] = permissive_safety_settings()
-    except Exception:
-        pass
-    config = gtypes.GenerateContentConfig(**config_kwargs)
-
-    last_err = None
-    for attempt in range(max(1, len(_ALL_KEYS))):
+    image_part = None
+    if img_bytes:
         try:
-            # 50s ceiling — DO's load-balancer kills the request at ~60s
-            # and serves an HTML 502 page that the mobile app can't parse
-            # ("Couldn't regenerate"). Bail with a clean JSON error first.
-            resp = await asyncio.wait_for(
-                asyncio.to_thread(
-                    client.models.generate_content,
-                    model=PRO_MODEL,
-                    contents=user_prompt,
-                    config=config,
-                ),
-                timeout=50,
+            image_part = gtypes.Part.from_bytes(
+                data=img_bytes, mime_type="image/jpeg",
             )
-            raw = (resp.text or "").strip()
-            if not raw:
-                last_err = "empty"
-                continue
-            import re as _re
-            fence = _re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
-            if fence:
-                raw = fence.group(1).strip()
-            data = json.loads(raw)
-            replies = [
-                {
-                    "label": r.get("label", "option"),
-                    "text": r.get("text", ""),
-                    "why": r.get("why", ""),
-                }
-                for r in (data.get("replies") or [])
-                if r.get("text")
-            ]
-            # Pro tokens are pricier — log a fixed-rate estimate.
-            cost_cents = 0.5  # ~$0.005 per generation, rough
-            return (
-                replies,
-                data.get("read", ""),
-                data.get("advice", ""),
-                "pro",
-                cost_cents,
-            )
-        except (asyncio.TimeoutError, Exception) as exc:
-            last_err = str(exc)
-            if "429" in last_err or "RESOURCE_EXHAUSTED" in last_err or "timeout" in last_err.lower():
-                rotate_api_key()
-                client = make_genai_client()
-                continue
-            break
+        except Exception as exc:
+            print(f"[saas-pipeline] image-part build failed: {exc}")
+            image_part = None
 
-    print(f"[saas-pipeline] pro generation failed: {last_err}")
-    return [], "", "", "pro-error", 0.0
+    def build_config():
+        kwargs = {
+            "temperature": 0.85,
+            "max_output_tokens": 8192,
+            "response_mime_type": "application/json",
+        }
+        if system_instr:
+            kwargs["system_instruction"] = system_instr
+        try:
+            kwargs["safety_settings"] = permissive_safety_settings()
+        except Exception:
+            pass
+        return gtypes.GenerateContentConfig(**kwargs)
+
+    async def attempt(safe: bool, with_image: bool) -> tuple[bool, dict | None, str]:
+        """Single attempt. Returns (succeeded, parsed_data, last_err).
+        Parsed_data is None on failure."""
+        prompt = build_user_prompt(safe)
+        # contents: prompt first, then image if available
+        contents: list = [prompt]
+        if with_image and image_part is not None:
+            contents.append(image_part)
+        client = make_genai_client()
+        for _ in range(max(1, len(_ALL_KEYS))):
+            try:
+                resp = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        client.models.generate_content,
+                        model=PRO_MODEL,
+                        contents=contents,
+                        config=build_config(),
+                    ),
+                    timeout=50,
+                )
+                raw = (resp.text or "").strip()
+                if not raw:
+                    return False, None, "empty"
+                import re as _re
+                fence = _re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
+                if fence:
+                    raw = fence.group(1).strip()
+                return True, json.loads(raw), ""
+            except Exception as exc:
+                err = str(exc)
+                # Block patterns → caller retries with safer framing
+                if (
+                    "PROHIBITED_CONTENT" in err
+                    or "blocked" in err.lower()
+                    or "safety" in err.lower()
+                ):
+                    return False, None, "prohibited_content"
+                # Quota / timeout → rotate key, retry inside this attempt
+                if (
+                    "429" in err
+                    or "RESOURCE_EXHAUSTED" in err
+                    or "timeout" in err.lower()
+                ):
+                    rotate_api_key()
+                    client = make_genai_client()
+                    continue
+                return False, None, err
+        return False, None, "all_keys_exhausted"
+
+    # Try in tiers — best quality first, then progressively safer.
+    tiers: list[tuple[str, bool, bool]] = [
+        ("full+image", False, True),    # full prompt + image (best)
+        ("full-noimg", False, False),   # drop image (image may have triggered safety)
+        ("safe", True, False),          # reframed as analysis
+    ]
+    errors: list[tuple[str, str]] = []
+    data: dict | None = None
+    for label, safe, with_image in tiers:
+        ok, parsed, err = await attempt(safe=safe, with_image=with_image)
+        if ok:
+            data = parsed
+            break
+        errors.append((label, err))
+    if data is None:
+        print(f"[saas-pipeline] pro generation failed across all tiers: {errors}")
+        return [], "", "", "pro-error", 0.0
+
+    replies = [
+        {
+            "label": r.get("label", "option"),
+            "text": r.get("text", ""),
+            "why": r.get("why", ""),
+        }
+        for r in (data.get("replies") or [])
+        if r.get("text")
+    ]
+    cost_cents = 0.5  # ~$0.005 per generation, rough
+    return (
+        replies,
+        data.get("read", ""),
+        data.get("advice", ""),
+        "pro",
+        cost_cents,
+    )
 
 
 async def _generate_for_user_messages(
