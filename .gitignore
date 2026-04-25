@@ -18,6 +18,10 @@ mobile/.env
 *.pem
 *.key
 data/saas/.jwt_secret
+# Firebase / FCM credentials (uploaded to EAS secrets, NOT in git)
+mobile/google-services.json
+FIREBASE FILES/
+*-firebase-adminsdk-*.json
 
 # ── Local user data (provisioned via DO persistent disk in prod) ──
 data/
