@@ -12,7 +12,11 @@ import io
 import time
 from dataclasses import dataclass, field
 
-import mss
+try:
+    import mss  # type: ignore
+except Exception:  # pragma: no cover — Linux server without screen
+    mss = None  # type: ignore
+
 import numpy as np
 import PIL.Image
 

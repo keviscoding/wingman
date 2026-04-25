@@ -11,12 +11,17 @@ from dataclasses import dataclass
 
 import PIL.Image
 
-# Apple Vision via PyObjC --------------------------------------------------
-import Vision
-import Quartz
-from Foundation import NSDictionary
-
-# --------------------------------------------------------------------------
+# Apple Vision via PyObjC — macOS-only. Guarded so the module imports
+# cleanly on Linux servers where pyobjc isn't installed; the OCR code
+# paths only ever run on the desktop.
+try:
+    import Vision  # type: ignore
+    import Quartz  # type: ignore
+    from Foundation import NSDictionary  # type: ignore
+except Exception:  # pragma: no cover
+    Vision = None  # type: ignore
+    Quartz = None  # type: ignore
+    NSDictionary = None  # type: ignore
 
 
 @dataclass

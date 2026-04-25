@@ -10,7 +10,12 @@ from __future__ import annotations
 import asyncio
 from typing import Callable
 
-import pyaudio
+# pyaudio needs PortAudio at runtime — desktop-only. Guarded so the
+# module imports cleanly on the headless server.
+try:
+    import pyaudio  # type: ignore
+except Exception:  # pragma: no cover
+    pyaudio = None  # type: ignore
 
 from google import genai
 from google.genai import types

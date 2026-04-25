@@ -14,9 +14,21 @@ import time
 import threading
 from pathlib import Path
 
-import cv2
+# Desktop-only deps. Made optional so this module loads cleanly on
+# headless Linux boxes (e.g. the SaaS server on DigitalOcean) where
+# OpenCV / mss aren't installed. The code paths that actually USE
+# these only run from the desktop entry point.
+try:
+    import cv2  # type: ignore
+except Exception:  # pragma: no cover
+    cv2 = None  # type: ignore
+
 import numpy as np
-import mss
+
+try:
+    import mss  # type: ignore
+except Exception:  # pragma: no cover
+    mss = None  # type: ignore
 
 from google.genai import types
 
