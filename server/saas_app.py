@@ -95,3 +95,25 @@ async def index() -> dict:
             "chats": "/api/v1/chats",
         },
     }
+
+
+@app.get("/diag/playbook")
+async def diag_playbook() -> dict:
+    """Diagnostic — confirms the Master Playbook is loaded into the
+    running process. Returns size + first 200 chars (enough to see
+    'Master Playbook' / 'Playing With Fire' in the response). If
+    chars=0 or status != 'loaded', Pro generations are running with
+    no playbook and replies will be vanilla Gemini.
+    """
+    try:
+        from wingman.training_rag import TrainingRAG
+        rag = TrainingRAG()
+        rag.load()
+        pb = rag.knowledge_summary or ""
+        return {
+            "status": rag.status,
+            "chars": len(pb),
+            "preview": pb[:200],
+        }
+    except Exception as exc:
+        return {"status": "error", "chars": 0, "error": str(exc)}
