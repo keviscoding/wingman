@@ -126,6 +126,18 @@ function JobChip({
     );
   }
   if (job.status === "ready") {
+    // Server returns model tag (e.g. "tuned-v4", "pro", "pro-error").
+    // Surface it discreetly so we can see at a glance which path served
+    // a given generation — helps diagnose Fast→Pro fallbacks in the field.
+    const modelTag = job.result?.model || "";
+    const took = Math.max(
+      0,
+      Math.floor(((job.result?.generated_at || Date.now() / 1000) * 1000 - job.startedAt) / 1000),
+    );
+    const subtitle =
+      modelTag && took > 0
+        ? `Tap to view · ${modelTag} · ${took}s`
+        : "Tap to view";
     return (
       <Chip
         bg={theme.accent}
@@ -142,7 +154,7 @@ function JobChip({
           </Text>
         }
         title={`Replies ready · ${job.contact || "chat"}`}
-        subtitle="Tap to view"
+        subtitle={subtitle}
         onTap={onView}
         onClose={onDismiss}
         textColor={theme.bg}
