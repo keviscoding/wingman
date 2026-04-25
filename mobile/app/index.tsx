@@ -41,10 +41,8 @@ import {
   TopBar,
   QuotaBadge,
 } from "../components/ui";
-import { NoInternetBanner } from "../components/Banners";
 import { NewScreenshotBanner } from "../components/NewScreenshotBanner";
 import { ModeToggle } from "../components/ModeToggle";
-import { refetchNetwork, useOnlineStatus } from "../lib/netStatus";
 import { enqueueJob, useHasUnseen, useRunningCount } from "../lib/genQueue";
 import { useMode } from "../lib/modeStore";
 import { setProcessedScreenshotId } from "../lib/screenshotWatcher";
@@ -61,7 +59,6 @@ export default function HomeScreen() {
   const { token, me, signOut, refreshMe } = useAuth();
   const router = useRouter();
   const [phase, setPhase] = useState<Phase>({ kind: "init" });
-  const online = useOnlineStatus();
   const runningCount = useRunningCount();
   const hasUnseen = useHasUnseen();
   const [mode, setMode] = useMode();
@@ -233,14 +230,6 @@ export default function HomeScreen() {
         }
       />
 
-      {!online && (
-        <NoInternetBanner
-          onRetry={() => {
-            refetchNetwork();
-            scan(false);
-          }}
-        />
-      )}
       <NewScreenshotBanner />
 
       {/* Mode toggle — sits just under the top bar so it's the first

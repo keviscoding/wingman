@@ -7,6 +7,7 @@ import { PaywallSheet } from "../components/PaywallSheet";
 import { AuthProvider, useAuth } from "../lib/auth";
 import { useOnboardingSeen } from "../lib/onboardingState";
 import { dismissPaywall, usePaywallSignal } from "../lib/paywallStore";
+import { primeNotifications } from "../lib/pushNotify";
 import { theme } from "../lib/theme";
 
 function AuthGate() {
@@ -36,6 +37,12 @@ function AuthGate() {
       }
     }
   }, [token, loading, segments, router, seen]);
+
+  // Once a user is signed in and onboarded, ask for notification
+  // permission — fire-and-forget, runs once per app launch.
+  useEffect(() => {
+    if (token && seen) primeNotifications();
+  }, [token, seen]);
 
   return null;
 }

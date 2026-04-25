@@ -1,9 +1,10 @@
-// Fast / Pro mode toggle. Pill-shaped with two segments — left (Fast)
+// Quick / Pro mode toggle. Pill-shaped with two segments — left (Quick)
 // is the default. Right (Pro) is mint-accented and has a small "PRO"
 // badge for free users to signal it's gated.
 //
-// We deliberately don't expose model names ("Gemini 3.1 Pro") in the
-// UI — competitors would copy. Users just see "Fast" vs "Pro".
+// We deliberately hide all model internals ("Gemini 3.1 Pro", "tuned
+// v4", etc.) from the UI — competitors would copy. Users only see
+// "Quick" vs "Pro" — both stay branded as Wingman replies.
 
 import { Text, View } from "react-native";
 import { Pressable } from "./ui";
@@ -48,7 +49,7 @@ export function ModeToggle({ mode, onChange, size = "default" }: Props) {
         py={py}
         fs={fs}
       >
-        Fast
+        Quick
       </Segment>
       <Segment
         active={mode === "pro"}

@@ -1,7 +1,7 @@
 // Banner that floats below the top bar when a new screenshot is
 // detected (e.g. user took a screenshot in another app and returned
 // to Wingman). Tapping enqueues a job through the global queue using
-// the user's currently selected mode (Fast / Pro), so the work is
+// the user's currently selected mode (Quick / Pro), so the work is
 // indistinguishable from a Generate tap on the home screen.
 
 import { Image } from "expo-image";
