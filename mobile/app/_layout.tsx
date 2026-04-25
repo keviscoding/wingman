@@ -8,8 +8,7 @@ import { AuthProvider, useAuth } from "../lib/auth";
 import { useOnboardingSeen } from "../lib/onboardingState";
 import { checkAndApplyUpdate } from "../lib/otaCheck";
 import { dismissPaywall, usePaywallSignal } from "../lib/paywallStore";
-import { api } from "../lib/api";
-import { getExpoPushToken, primeNotifications } from "../lib/pushNotify";
+import { registerWithServer } from "../lib/pushNotify";
 import { theme } from "../lib/theme";
 
 function AuthGate() {
@@ -52,29 +51,24 @@ function AuthGate() {
     }
   }, [token, loading, segments, router, seen]);
 
-  // Once a user is signed in and onboarded:
-  //   1. Ask for notification permission
-  //   2. Get the Expo push token
-  //   3. POST it to our backend so the server can fire pushes when
-  //      generations complete, even with JS suspended in background.
-  // Runs once per launch — no harm if it re-runs.
+  // Once a user is signed in: chain permission → Expo token → backend.
+  // registerWithServer is tolerant; failures resolve cleanly. The
+  // Settings 'Send test notification' button will retry with detailed
+  // error reporting if this background attempt didn't take.
   useEffect(() => {
-    if (!(token && seen)) return;
+    if (!token) return;
     let cancelled = false;
     (async () => {
-      await primeNotifications();
-      const expoToken = await getExpoPushToken();
-      if (cancelled || !expoToken) return;
-      try {
-        await api.registerPushToken(token, expoToken);
-      } catch {
-        /* swallow — server can be unreachable; we'll re-register next launch */
+      const r = await registerWithServer(token);
+      if (cancelled) return;
+      if (__DEV__ && !r.ok) {
+        console.warn("[push] register failed:", r.reason, r.detail);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [token, seen]);
+  }, [token]);
 
   return null;
 }

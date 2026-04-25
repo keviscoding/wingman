@@ -9,6 +9,7 @@ import { Alert, Platform, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api, ApiError } from "../lib/api";
 import { useAuth } from "../lib/auth";
+import { registerWithServer } from "../lib/pushNotify";
 import { theme } from "../lib/theme";
 import { Pressable, TopBar } from "../components/ui";
 
@@ -18,23 +19,52 @@ export default function SettingsScreen() {
 
   const onTestPush = async () => {
     if (!token) return;
-    try {
-      await api.testPush(token);
-      Alert.alert(
-        "Test sent",
-        "If you don't see a notification within 5 seconds, check Settings → Apps → Wingman → Notifications.",
-      );
-    } catch (e: any) {
-      const detail = e instanceof ApiError ? e.detail : "request_failed";
-      if (detail === "no_push_token_registered") {
+
+    // Try to send. If the server says we don't have a token, attempt
+    // a fresh registration first then retry.
+    const trySend = async () => {
+      try {
+        await api.testPush(token);
         Alert.alert(
-          "Push token not registered",
-          "Sign out and back in once so the app can register with the server.",
+          "Test sent",
+          "If you don't see a notification within 5 seconds, check Settings → Apps → Wingman → Notifications.",
         );
-      } else {
+        return true;
+      } catch (e: any) {
+        const detail = e instanceof ApiError ? e.detail : "request_failed";
+        if (detail === "no_push_token_registered") return false;
         Alert.alert("Test failed", detail);
+        return true; // don't retry on other errors
       }
+    };
+
+    const sent = await trySend();
+    if (sent) return;
+
+    // No token on server — register, then retry. Surface specific
+    // failure modes so the user knows what to fix.
+    const reg = await registerWithServer(token);
+    if (!reg.ok) {
+      const reason = reg.reason;
+      const msg =
+        reason === "module_missing"
+          ? "Notifications aren't available in this build."
+          : reason === "permission_denied"
+            ? "Notifications permission is denied. Open Settings → Apps → Wingman → Notifications and enable, then try again."
+            : reason === "no_token"
+              ? `Couldn't get a push token from the OS${reg.detail ? ` (${reg.detail})` : ""}. This usually means Google Play Services is missing or push isn't supported on this device.`
+              : `Server rejected the token registration${reg.detail ? `: ${reg.detail}` : ""}.`;
+      Alert.alert("Couldn't enable push", msg, [
+        reason === "permission_denied"
+          ? { text: "Open settings", onPress: () => Linking.openSettings() }
+          : { text: "OK" },
+        { text: "Cancel", style: "cancel" },
+      ]);
+      return;
     }
+
+    // Token registered — retry the test send.
+    await trySend();
   };
 
   const onDeleteAccount = () => {
