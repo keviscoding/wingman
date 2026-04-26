@@ -103,7 +103,7 @@ export default function SettingsScreen() {
                       if (detail !== "invalid_or_expired_token") {
                         Alert.alert(
                           "Couldn't delete account",
-                          "Server didn't confirm the delete. Try again, or contact support@clippr.io.",
+                          "Server didn't confirm the delete. Try again, or contact kevis2busy@gmail.com.",
                         );
                         return;
                       }

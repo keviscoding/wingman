@@ -3,14 +3,14 @@
 These two pages are the **Privacy Policy** and **Terms of Service**
 required by Google Play and Apple App Store. They're written
 specifically for Wingman and live under a `/wingman/` subpath of
-clippr.io so they don't overlap with whatever Clippr already has at
+cliprr.io so they don't overlap with whatever Clippr already has at
 `/privacy` or `/terms`.
 
 ## Files
 
-- `clippr-deploy/privacy.html` → drop into Clippr at
+- `cliprr-deploy/privacy.html` → drop into Clippr at
   `project/wingman/privacy.html`
-- `clippr-deploy/terms.html` → drop into Clippr at
+- `cliprr-deploy/terms.html` → drop into Clippr at
   `project/wingman/terms.html`
 
 (If your Clippr static-site root is elsewhere, place them so they
@@ -18,8 +18,8 @@ serve at the URLs below.)
 
 ## Final live URLs
 
-- `https://clippr.io/wingman/privacy.html`
-- `https://clippr.io/wingman/terms.html`
+- `https://cliprr.io/wingman/privacy.html`
+- `https://cliprr.io/wingman/terms.html`
 
 These are the URLs to paste into:
 
@@ -32,8 +32,8 @@ These are the URLs to paste into:
 ```bash
 # In the Clippr repo
 mkdir -p project/wingman
-cp /path/to/wingman-og/legal/clippr-deploy/privacy.html  project/wingman/
-cp /path/to/wingman-og/legal/clippr-deploy/terms.html    project/wingman/
+cp /path/to/wingman-og/legal/cliprr-deploy/privacy.html  project/wingman/
+cp /path/to/wingman-og/legal/cliprr-deploy/terms.html    project/wingman/
 
 git add project/wingman/
 git commit -m "Add Wingman legal pages (privacy + terms)"
