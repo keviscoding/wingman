@@ -150,6 +150,13 @@ export const api = {
     return request("/api/v1/me/test-push", { method: "POST", token });
   },
 
+  /** Permanently delete the user's account and ALL their data.
+   *  Required by Play Store / Apple. The mobile UI should sign the
+   *  user out locally immediately after this resolves. */
+  async deleteAccount(token: string): Promise<{ ok: boolean }> {
+    return request("/api/v1/me", { method: "DELETE", token });
+  },
+
   async listChats(token: string): Promise<{ chats: ChatSummary[] }> {
     return request<{ chats: ChatSummary[] }>("/api/v1/chats", { token });
   },

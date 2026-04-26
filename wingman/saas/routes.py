@@ -187,6 +187,26 @@ async def test_push(user: Annotated[dict, Depends(current_user)]):
     return {"ok": True, "token_prefix": token[:30]}
 
 
+@router.delete("/me")
+async def delete_me(user: Annotated[dict, Depends(current_user)]):
+    """In-app account deletion. Required by Google Play and Apple App
+    Store for any app that supports account creation.
+
+    Removes the user row, which cascades to:
+      - sessions (any active JWTs become invalid on next request since
+        we look up the user by id)
+      - generations audit log
+      - jobs queue (running and historical)
+      - chats (messages, replies, meta)
+
+    Idempotent — calling this twice for an already-deleted user just
+    returns ok:true. Mobile signs out client-side after the call so
+    the local JWT is forgotten.
+    """
+    db.delete_user(user["id"])
+    return {"ok": True, "deleted_user_id": user["id"]}
+
+
 @router.get("/me", response_model=MeResponse)
 async def me(user: Annotated[dict, Depends(current_user)]):
     q = db.get_user_quota_state(user["id"])

@@ -354,6 +354,30 @@ def get_push_token(user_id: str) -> str | None:
     return user.get("push_token") if user else None
 
 
+def delete_user(user_id: str) -> bool:
+    """Permanently delete a user and ALL their data.
+
+    Every dependent table (sessions, generations, jobs, chats) is
+    declared with ON DELETE CASCADE so a single user-row delete
+    purges everything atomically. Returns True if a row was removed.
+
+    This is the function that backs Play Store's required in-app
+    'Delete account' flow. After it runs, the only trace left of the
+    user is whatever's in the app-platform request logs (which roll
+    off after a few weeks).
+    """
+    with connect() as conn:
+        # Verify the user existed before we report success — otherwise
+        # callers can't distinguish "deleted" from "never existed".
+        before = conn.execute(
+            "SELECT 1 FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+        if not before:
+            return False
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        return True
+
+
 # ─────────────── Job helpers ───────────────
 
 

@@ -70,23 +70,48 @@ export default function SettingsScreen() {
   const onDeleteAccount = () => {
     Alert.alert(
       "Delete your account?",
-      "This permanently removes your chats and replies. We can't undo this.",
+      "This permanently removes your account, all chats, and all generated replies. We can't undo this.",
       [
         { text: "Cancel", style: "cancel" },
         {
           text: "Delete",
           style: "destructive",
           onPress: () => {
+            // Double-confirm — Play Store explicitly requires a
+            // multi-step flow so deletion isn't a one-tap accident.
             Alert.alert(
               "Are you absolutely sure?",
-              "Tap delete to confirm. You'll be signed out and your data will be erased within 24 hours.",
+              "This is permanent. Your account and all data will be erased immediately.",
               [
                 { text: "Cancel", style: "cancel" },
                 {
                   text: "Delete forever",
                   style: "destructive",
-                  // TODO: wire to DELETE /api/v1/me once endpoint ships
-                  onPress: () => signOut(),
+                  onPress: async () => {
+                    if (!token) {
+                      await signOut();
+                      return;
+                    }
+                    try {
+                      await api.deleteAccount(token);
+                    } catch (e: any) {
+                      const detail =
+                        e instanceof ApiError ? e.detail : "request_failed";
+                      // 401 = token already invalid (server-side
+                      // delete must have already happened, or auth
+                      // expired). Either way, sign out locally.
+                      if (detail !== "invalid_or_expired_token") {
+                        Alert.alert(
+                          "Couldn't delete account",
+                          "Server didn't confirm the delete. Try again, or contact support@clippr.io.",
+                        );
+                        return;
+                      }
+                    }
+                    // Always sign out client-side after a successful
+                    // (or already-completed) delete.
+                    await signOut();
+                  },
                 },
               ],
             );
