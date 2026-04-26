@@ -51,14 +51,14 @@ step, no framework, light/dark aware via `prefers-color-scheme`.
 Both reference the **operator name** and **postal address** I pulled
 from your Play Console screenshot:
 
-- Operator: Oguzo Jeffries Nwali
+- Operator: CreativeTube Ltd
 - Address: 22 West Park Drive, Blackpool, FY3 9DN, United Kingdom
-- Contact email: kevis2busy@gmail.com
+- Contact email: contact@cliprr.io
 
 When you convert your Play Console account to an Organization with a
 DUNS-registered company name, do a find-and-replace on both files:
 
-- `Oguzo Jeffries Nwali` → your registered company name
+- `CreativeTube Ltd` → your registered company name
 - The postal address can stay or be updated to your registered
   business address
 - The contact email should ideally become a `support@yourdomain.com`

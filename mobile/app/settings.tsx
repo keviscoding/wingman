@@ -189,17 +189,17 @@ export default function SettingsScreen() {
           <Row
             label="Privacy Policy"
             chevron
-            onPress={() => Linking.openURL("https://wingman.app/privacy")}
+            onPress={() => Linking.openURL("https://cliprr.io/wingman/privacy.html")}
           />
           <Row
             label="Terms of Service"
             chevron
-            onPress={() => Linking.openURL("https://wingman.app/terms")}
+            onPress={() => Linking.openURL("https://cliprr.io/wingman/terms.html")}
           />
           <Row
             label="Contact support"
             chevron
-            onPress={() => Linking.openURL("mailto:support@wingman.app")}
+            onPress={() => Linking.openURL("mailto:contact@cliprr.io")}
           />
           <Row label="Version" detail="1.0.0 (build 1)" isLast />
         </Section>

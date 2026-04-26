@@ -256,12 +256,12 @@ export function PaywallSheet({
           <TextLink label="Restore" onPress={() => {}} size={theme.fontSizes.sm} />
           <TextLink
             label="Privacy"
-            onPress={() => Linking.openURL("https://wingman.app/privacy")}
+            onPress={() => Linking.openURL("https://cliprr.io/wingman/privacy.html")}
             size={theme.fontSizes.sm}
           />
           <TextLink
             label="Terms"
-            onPress={() => Linking.openURL("https://wingman.app/terms")}
+            onPress={() => Linking.openURL("https://cliprr.io/wingman/terms.html")}
             size={theme.fontSizes.sm}
           />
         </View>
