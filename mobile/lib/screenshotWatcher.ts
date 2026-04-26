@@ -38,10 +38,11 @@ export function setProcessedScreenshotId(id: string | null) {
   notify(null);
 }
 
-// Don't auto-fire (or banner-fire) for anything older than this. Home
-// screen's scan() uses 90s for auto-fire; the banner uses up to 5 min
-// for older-but-still-relevant prompting.
-const AUTO_FIRE_MAX_AGE_S = 90;
+// Mirror home's auto-fire window so the watcher's deferred-banner
+// logic uses the same threshold for "this is fresh enough to claim".
+// Keeping these in sync prevents the banner from firing for a
+// screenshot that home WOULD auto-fire on (we'd just be racing).
+const AUTO_FIRE_MAX_AGE_S = 180;
 
 async function scanAndNotify() {
   if (inFlight) return;

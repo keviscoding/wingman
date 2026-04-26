@@ -16,7 +16,7 @@
 
 import * as ImagePicker from "expo-image-picker";
 import { Image } from "expo-image";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -55,7 +55,10 @@ type Phase =
   | { kind: "ready"; screenshot: RecentScreenshot | null }
   | { kind: "error"; message: string; screenshot: RecentScreenshot | null };
 
-const AUTO_FIRE_MAX_AGE_S = 90;
+// 3 minutes — covers the "took a screenshot, got distracted briefly,
+// then opened Wingman" case. Older than this we just show the
+// thumbnail and let the user choose whether to analyze.
+const AUTO_FIRE_MAX_AGE_S = 180;
 
 export default function HomeScreen() {
   const { token, me, signOut, refreshMe } = useAuth();
@@ -187,6 +190,22 @@ export default function HomeScreen() {
     });
     return () => sub.remove();
   }, [scan]);
+
+  // Re-scan with autoUpload=true every time home regains focus.
+  // Covers the case where the app stays foregrounded but the user
+  // navigates away (chats list, settings) and comes back. AppState
+  // never fires 'active' here, so without this we'd miss new
+  // screenshots taken while still inside Wingman.
+  //
+  // The previous race that caused us to remove this is no longer a
+  // concern: scan(true) and the watcher's deferred banner now both
+  // share the same 'fresh-and-unclaimed' check, with a 1500ms grace
+  // period that lets scan win every realistic timing scenario.
+  useFocusEffect(
+    useCallback(() => {
+      scan(true);
+    }, [scan]),
+  );
 
   /* ─────────────── Render ─────────────── */
 
