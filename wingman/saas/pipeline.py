@@ -28,27 +28,23 @@ from .user_context import UserContext
 
 
 async def _extract_chat_from_image(img_bytes: bytes) -> tuple[str, list[dict]]:
-    """Run RAPID_FIRE_PROMPT against the image with Flash Lite.
-    Returns (contact_name, [{speaker, text}, ...]).
+    """Run RAPID_FIRE_PROMPT against the image. Returns (contact_name,
+    [{speaker, text}, ...]).
 
-    Performance: Flash Lite is ~2-3× faster than Flash and more than
-    enough for transcript extraction (which is closer to OCR + light
-    structuring than reasoning). max_output_tokens trimmed from 8192 →
-    3072 since a typical chat screenshot transcribes to <1500 tokens
-    and the model burns thinking-budget against the cap otherwise.
+    Robust to model outages: tries Flash Lite (fastest, default), and
+    on 503/UNAVAILABLE/quota errors falls back to regular Flash so
+    extraction keeps working when Google rate-limits a specific model.
+    Both produce comparable output for OCR + light structuring.
     """
     from wingman.config import (
-        FLASH_LITE_MODEL, RAPID_FIRE_PROMPT, make_genai_client, rotate_api_key,
-        _ALL_KEYS,
+        FLASH_LITE_MODEL, FLASH_MODEL, RAPID_FIRE_PROMPT,
+        make_genai_client, rotate_api_key, _ALL_KEYS,
     )
     from google.genai import types as gtypes
     import re as _re
 
-    client = make_genai_client()
     image_part = gtypes.Part.from_bytes(data=img_bytes, mime_type="image/jpeg")
-    # Build config — disable thinking budget when SDK supports it.
-    # Extraction is mechanical (closer to OCR), thinking just adds latency.
-    config_kwargs = {
+    config_kwargs: dict = {
         "temperature": 0.1,
         "max_output_tokens": 3072,
         "response_mime_type": "application/json",
@@ -56,42 +52,75 @@ async def _extract_chat_from_image(img_bytes: bytes) -> tuple[str, list[dict]]:
     try:
         config_kwargs["thinking_config"] = gtypes.ThinkingConfig(thinking_budget=0)
     except Exception:
-        pass  # Older SDK — thinking is on by default, tolerate it
+        pass
     config = gtypes.GenerateContentConfig(**config_kwargs)
 
-    last_err = None
-    for attempt in range(max(1, len(_ALL_KEYS))):
-        try:
-            resp = await asyncio.to_thread(
-                client.models.generate_content,
-                model=FLASH_LITE_MODEL,
-                contents=[RAPID_FIRE_PROMPT, image_part],
-                config=config,
-            )
-            raw = (resp.text or "").strip()
-            if not raw:
-                last_err = "empty"
-                continue
-            # Strip code fences if any
-            fence = _re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
-            if fence:
-                raw = fence.group(1).strip()
-            data = json.loads(raw)
-            messages = []
-            for m in (data.get("messages") or []):
-                speaker = m.get("speaker", "")
-                text = (m.get("text") or "").strip()
-                if speaker in ("me", "them") and text:
-                    messages.append({"speaker": speaker, "text": text})
-            return (data.get("contact", "") or "").strip(), messages
-        except Exception as exc:
-            last_err = str(exc)
-            if "429" in last_err or "RESOURCE_EXHAUSTED" in last_err:
-                rotate_api_key()
-                client = make_genai_client()
-                continue
-            break
-    print(f"[saas-pipeline] extract failed: {last_err}")
+    def _is_unavailable(err: str) -> bool:
+        u = err.upper()
+        return (
+            "503" in err
+            or "UNAVAILABLE" in u
+            or "OVERLOADED" in u
+            or "DEADLINE_EXCEEDED" in u
+        )
+
+    def _is_quota(err: str) -> bool:
+        u = err.upper()
+        return "429" in err or "RESOURCE_EXHAUSTED" in u or "RATE LIMIT" in u
+
+    async def _try_model(model_name: str) -> tuple[bool, str, list[dict], str]:
+        """Returns (ok, contact, messages, last_err)."""
+        client = make_genai_client()
+        last_err = ""
+        for _ in range(max(1, len(_ALL_KEYS))):
+            try:
+                resp = await asyncio.to_thread(
+                    client.models.generate_content,
+                    model=model_name,
+                    contents=[RAPID_FIRE_PROMPT, image_part],
+                    config=config,
+                )
+                raw = (resp.text or "").strip()
+                if not raw:
+                    last_err = "empty"
+                    continue
+                fence = _re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
+                if fence:
+                    raw = fence.group(1).strip()
+                data = json.loads(raw)
+                messages = []
+                for m in (data.get("messages") or []):
+                    speaker = m.get("speaker", "")
+                    text = (m.get("text") or "").strip()
+                    if speaker in ("me", "them") and text:
+                        messages.append({"speaker": speaker, "text": text})
+                return True, (data.get("contact", "") or "").strip(), messages, ""
+            except Exception as exc:
+                last_err = str(exc)
+                if _is_quota(last_err):
+                    rotate_api_key()
+                    client = make_genai_client()
+                    continue
+                # 503 / unavailable → caller will try a different model
+                if _is_unavailable(last_err):
+                    return False, "", [], last_err
+                # Other errors: give up on this model
+                return False, "", [], last_err
+        return False, "", [], last_err
+
+    # Tier 1: Flash Lite (fast, default)
+    ok, contact, messages, err1 = await _try_model(FLASH_LITE_MODEL)
+    if ok:
+        return contact, messages
+    print(f"[saas-pipeline] extract via Flash Lite failed: {err1[:200]}")
+
+    # Tier 2: Flash (regular) — slightly slower but rarely both go down at once
+    ok, contact, messages, err2 = await _try_model(FLASH_MODEL)
+    if ok:
+        print("[saas-pipeline] extract recovered via FLASH_MODEL fallback")
+        return contact, messages
+    print(f"[saas-pipeline] extract via Flash also failed: {err2[:200]}")
+
     return "", []
 
 
