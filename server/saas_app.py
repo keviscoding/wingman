@@ -143,6 +143,52 @@ async def index() -> dict:
     }
 
 
+@app.get("/diag/db")
+async def diag_db() -> dict:
+    """Confirm which backend (Postgres vs SQLite) the running container
+    is actually using, plus a row-count sanity check on the users table.
+    Used to verify the DATABASE_URL injection took effect after the
+    Postgres migration deploy."""
+    try:
+        from wingman.saas import db
+        with db.connect() as conn:
+            row = conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()
+            users = row["n"] if row else 0
+            row2 = conn.execute("SELECT COUNT(*) AS n FROM chats").fetchone()
+            chats = row2["n"] if row2 else 0
+        return {
+            "backend": "postgres" if db.USE_PG else "sqlite",
+            "users": users,
+            "chats": chats,
+        }
+    except Exception as exc:
+        return {"backend": "error", "error": str(exc)}
+
+
+@app.get("/diag/extract")
+async def diag_extract() -> dict:
+    """Test that the Flash Lite extraction call can reach Gemini.
+    Returns the first 80 chars of a mock response. Useful to confirm
+    GEMINI_API_KEYS is populated and the API surface is reachable."""
+    try:
+        from wingman.config import make_genai_client, FLASH_LITE_MODEL, _ALL_KEYS
+        if not _ALL_KEYS:
+            return {"ok": False, "error": "no_gemini_keys"}
+        client = make_genai_client()
+        from google.genai import types as gtypes
+        resp = client.models.generate_content(
+            model=FLASH_LITE_MODEL,
+            contents="Say only the word: OK",
+            config=gtypes.GenerateContentConfig(
+                temperature=0.0, max_output_tokens=16,
+            ),
+        )
+        text = (resp.text or "").strip()
+        return {"ok": True, "model": FLASH_LITE_MODEL, "preview": text[:80], "key_count": len(_ALL_KEYS)}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:300]}
+
+
 @app.get("/diag/playbook")
 async def diag_playbook() -> dict:
     """Diagnostic — confirms the Master Playbook is loaded into the
