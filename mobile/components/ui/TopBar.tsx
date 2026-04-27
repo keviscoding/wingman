@@ -75,7 +75,7 @@ export function TopBar(props: Props) {
               letterSpacing: theme.tracking.display,
             }}
           >
-            Wingman
+            Muzo
           </Text>
           <View style={{ flex: 1 }} />
           {props.right ? (

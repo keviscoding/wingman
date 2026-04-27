@@ -79,7 +79,7 @@ export function ServerDownBanner({ onRefresh }: { onRefresh?: () => void }) {
           flex: 1,
         }}
       >
-        Wingman is down for maintenance
+        Muzo is down for maintenance
       </Text>
       {onRefresh ? (
         <Pressable onPress={onRefresh}>

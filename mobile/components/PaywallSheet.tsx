@@ -30,60 +30,66 @@ import { Pressable, PrimaryButton, TextLink } from "./ui";
 import { theme } from "../lib/theme";
 
 export type PlanId =
-  | "pro_monthly"
+  | "pro_weekly"
   | "pro_yearly"
-  | "pro_max_monthly"
+  | "pro_max_weekly"
   | "pro_max_yearly";
 
 type Plan = {
   id: PlanId;
   tier: "pro" | "pro_max";
   title: string;
-  price: string;
-  perMonth?: string; // for yearly plans, show effective monthly price
+  /** One-line tagline shown under the title (the hero copy). */
+  tagline: string;
+  /** 1-2 supporting lines under the tagline. Kept short — paywall
+   *  cards lose conversion when crammed with bullets. */
   bullets: string[];
   tag?: string;
   highlight?: boolean;
 };
 
+// Pricing intentionally NOT in the Plan objects. Apple/Google show
+// the localized price in the native purchase sheet, and we want
+// flexibility to A/B test prices without redeploying. The card
+// communicates VALUE; the store sheet communicates PRICE.
+
 const PLANS: Plan[] = [
   {
-    id: "pro_monthly",
+    id: "pro_weekly",
     tier: "pro",
     title: "Pro",
-    price: "$14.99 / mo",
-    bullets: ["Unlimited Quick replies", "30 Pro replies / day", "Push notifications"],
+    tagline: "Premium AI. For the replies that matter.",
+    bullets: [
+      "The closer — use it when one reply changes the chat",
+      "20 Pro replies/day · billed weekly",
+    ],
   },
   {
     id: "pro_yearly",
     tier: "pro",
     title: "Pro · Yearly",
-    price: "$89.99 / yr",
-    perMonth: "$7.50 / mo",
-    bullets: ["Everything in Pro", "Save 50% vs monthly"],
+    tagline: "Same Pro. Half the price.",
+    bullets: ["Everything in Pro", "Save 50% vs weekly"],
     tag: "SAVE 50%",
   },
   {
-    id: "pro_max_monthly",
+    id: "pro_max_weekly",
     tier: "pro_max",
     title: "Pro Max",
-    price: "$29.99 / mo",
+    tagline: "For people who text more than they sleep.",
     bullets: [
-      "Everything in Pro",
-      "100 Pro replies / day (effectively unlimited)",
-      "Priority queue — faster generations",
-      "Early access to new features",
+      "100 Pro replies/day · priority queue · early access",
+      "Billed weekly",
     ],
-    tag: "POWER USER",
+    tag: "MOST POPULAR",
     highlight: true,
   },
   {
     id: "pro_max_yearly",
     tier: "pro_max",
     title: "Pro Max · Yearly",
-    price: "$199.99 / yr",
-    perMonth: "$16.66 / mo",
-    bullets: ["Everything in Pro Max", "Save ~45% vs monthly"],
+    tagline: "All Pro Max. Almost half off.",
+    bullets: ["Everything in Pro Max", "Save ~45% vs weekly"],
     tag: "BEST VALUE",
   },
 ];
@@ -111,7 +117,7 @@ export function PaywallSheet({
   cta = "Start 7-day free trial",
   upsellMode = false,
 }: Props) {
-  const defaultPlan: PlanId = upsellMode ? "pro_max_yearly" : "pro_yearly";
+  const defaultPlan: PlanId = upsellMode ? "pro_max_yearly" : "pro_max_weekly";
   const [selected, setSelected] = useState<PlanId>(defaultPlan);
   const translate = useRef(new Animated.Value(Dimensions.get("window").height)).current;
   const scrim = useRef(new Animated.Value(0)).current;
@@ -323,14 +329,14 @@ export function PaywallSheet({
             <TextLink
               label="Privacy"
               onPress={() =>
-                Linking.openURL("https://cliprr.io/wingman/privacy.html")
+                Linking.openURL("https://cliprr.io/muzo/privacy.html")
               }
               size={theme.fontSizes.sm}
             />
             <TextLink
               label="Terms"
               onPress={() =>
-                Linking.openURL("https://cliprr.io/wingman/terms.html")
+                Linking.openURL("https://cliprr.io/muzo/terms.html")
               }
               size={theme.fontSizes.sm}
             />
@@ -395,47 +401,28 @@ function PlanCard({
           </View>
         ) : null}
 
-        <View
+        <Text
           style={{
-            flexDirection: "row",
-            justifyContent: "space-between",
-            alignItems: "baseline",
+            color: theme.text,
+            fontSize: theme.fontSizes.lg,
+            fontWeight: theme.fontWeights.bold,
           }}
         >
-          <Text
-            style={{
-              color: theme.text,
-              fontSize: theme.fontSizes.lg,
-              fontWeight: theme.fontWeights.bold,
-            }}
-          >
-            {plan.title}
-          </Text>
-          <View style={{ alignItems: "flex-end" }}>
-            <Text
-              style={{
-                color: selected ? theme.accent : theme.text,
-                fontSize: theme.fontSizes.lg,
-                fontWeight: theme.fontWeights.bold,
-              }}
-            >
-              {plan.price}
-            </Text>
-            {plan.perMonth ? (
-              <Text
-                style={{
-                  color: theme.dimmer,
-                  fontSize: theme.fontSizes.sm,
-                  fontWeight: theme.fontWeights.medium,
-                }}
-              >
-                {plan.perMonth}
-              </Text>
-            ) : null}
-          </View>
-        </View>
+          {plan.title}
+        </Text>
 
-        <View style={{ gap: 4 }}>
+        <Text
+          style={{
+            color: selected ? theme.accent : theme.text,
+            fontSize: theme.fontSizes.md,
+            fontWeight: theme.fontWeights.semibold,
+            lineHeight: theme.fontSizes.md * theme.lineHeights.body,
+          }}
+        >
+          {plan.tagline}
+        </Text>
+
+        <View style={{ gap: 4, marginTop: 2 }}>
           {plan.bullets.map((b, i) => (
             <View key={i} style={{ flexDirection: "row", gap: 8 }}>
               <Text style={{ color: theme.accent, fontSize: 13 }}>•</Text>

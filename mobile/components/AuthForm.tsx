@@ -98,7 +98,7 @@ export function AuthForm({
                 letterSpacing: theme.tracking.display,
               }}
             >
-              Wingman
+              Muzo
             </Text>
 
             <View style={{ gap: theme.spacing.sm }}>

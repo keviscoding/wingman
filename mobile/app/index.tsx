@@ -361,7 +361,7 @@ function PermissionView({
             textAlign: "center",
           }}
         >
-          Wingman reads it instantly and writes 5 perfect replies.
+          Muzo reads it instantly and writes 5 perfect replies.
         </Text>
       </View>
       <View style={{ width: "100%", gap: theme.spacing.md + 2 }}>
@@ -424,7 +424,7 @@ function ReadyView({
               textAlign: "center",
             }}
           >
-            Wingman reads it instantly and writes 5 perfect replies.
+            Muzo reads it instantly and writes 5 perfect replies.
           </Text>
         </View>
         <View style={{ width: "100%" }}>

@@ -27,7 +27,7 @@ export default function SettingsScreen() {
         await api.testPush(token);
         Alert.alert(
           "Test sent",
-          "If you don't see a notification within 5 seconds, check Settings → Apps → Wingman → Notifications.",
+          "If you don't see a notification within 5 seconds, check Settings → Apps → Muzo → Notifications.",
         );
         return true;
       } catch (e: any) {
@@ -50,7 +50,7 @@ export default function SettingsScreen() {
         reason === "module_missing"
           ? "Notifications aren't available in this build."
           : reason === "permission_denied"
-            ? "Notifications permission is denied. Open Settings → Apps → Wingman → Notifications and enable, then try again."
+            ? "Notifications permission is denied. Open Settings → Apps → Muzo → Notifications and enable, then try again."
             : reason === "no_token"
               ? `Couldn't get a push token from the OS${reg.detail ? ` (${reg.detail})` : ""}. This usually means Google Play Services is missing or push isn't supported on this device.`
               : `Server rejected the token registration${reg.detail ? `: ${reg.detail}` : ""}.`;
@@ -189,12 +189,12 @@ export default function SettingsScreen() {
           <Row
             label="Privacy Policy"
             chevron
-            onPress={() => Linking.openURL("https://cliprr.io/wingman/privacy.html")}
+            onPress={() => Linking.openURL("https://cliprr.io/muzo/privacy.html")}
           />
           <Row
             label="Terms of Service"
             chevron
-            onPress={() => Linking.openURL("https://cliprr.io/wingman/terms.html")}
+            onPress={() => Linking.openURL("https://cliprr.io/muzo/terms.html")}
           />
           <Row
             label="Contact support"

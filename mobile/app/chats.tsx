@@ -625,7 +625,7 @@ function EmptyState({ onCapture }: { onCapture: () => void }) {
             textAlign: "center",
           }}
         >
-          Capture a chat — Wingman saves the conversation and your replies for later.
+          Capture a chat — Muzo saves the conversation and your replies for later.
         </Text>
       </View>
       <View style={{ width: "100%", maxWidth: 320 }}>

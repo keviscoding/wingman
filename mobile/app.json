@@ -1,9 +1,9 @@
 {
   "expo": {
-    "name": "Wingman",
-    "slug": "wingman",
+    "name": "Muzo",
+    "slug": "muzo",
     "version": "0.1.0",
-    "scheme": "wingman",
+    "scheme": "muzo",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -15,14 +15,13 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "app.wingman.mobile",
+      "bundleIdentifier": "app.muzo.mobile",
       "infoPlist": {
-        "NSPhotoLibraryUsageDescription": "Wingman reads your most recent screenshot to instantly suggest replies."
+        "NSPhotoLibraryUsageDescription": "Muzo reads your most recent screenshot to instantly suggest replies."
       }
     },
     "android": {
-      "package": "app.wingman.mobile",
-      "googleServicesFile": "./google-services.json",
+      "package": "app.muzo.mobile",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0a0a0f"
@@ -53,7 +52,7 @@
       [
         "expo-media-library",
         {
-          "photosPermission": "Wingman reads your most recent screenshot to instantly suggest replies.",
+          "photosPermission": "Muzo reads your most recent screenshot to instantly suggest replies.",
           "savePhotosPermission": false,
           "isAccessMediaLocationEnabled": false,
           "preventAutomaticRemovalOfAccessMediaLocation": false,
@@ -65,7 +64,7 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Wingman needs photo access to read screenshots."
+          "photosPermission": "Muzo needs photo access to read screenshots."
         }
       ]
     ],

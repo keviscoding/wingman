@@ -71,7 +71,7 @@ export async function registerWithServer(authToken: string): Promise<RegisterRes
   try {
     if (notif.setNotificationChannelAsync) {
       await notif.setNotificationChannelAsync("default", {
-        name: "Wingman replies",
+        name: "Muzo replies",
         importance: notif.AndroidImportance?.DEFAULT ?? 3,
         vibrationPattern: [0, 250, 250, 250],
         lightColor: "#66e0b4",

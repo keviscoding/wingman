@@ -16,7 +16,7 @@ export default function OnboardingScreen() {
   const slides = [
     {
       h: "Stuck on what to say?",
-      s: "Wingman writes the perfect reply in 3 seconds.",
+      s: "Muzo writes the perfect reply in 3 seconds.",
       body: <FrozenChat />,
     },
     {

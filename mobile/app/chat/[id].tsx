@@ -148,7 +148,7 @@ export default function ChatDetailScreen() {
     if (d === "generation_failed")
       return "Generation hit a snag. Try again — different chats sometimes succeed where one stalls.";
     if (d.startsWith("network:") || /network/i.test(d))
-      return "Couldn't reach Wingman. Check your connection and try again.";
+      return "Couldn't reach Muzo. Check your connection and try again.";
     if (d === "request_failed") return "Server hiccup. Try again in a sec.";
     return d;
   };

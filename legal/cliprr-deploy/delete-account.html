@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="index, follow" />
+  <title>Muzo — Delete Your Account</title>
+  <meta
+    name="description"
+    content="How to delete your Muzo account and the data associated with it."
+  />
+  <style>
+    :root {
+      --fg: #1a1a25;
+      --dim: #5b5b70;
+      --rule: #e5e5ec;
+      --link: #2563eb;
+      --bg: #ffffff;
+      --code: #f4f4f7;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --fg: #f1f1f5;
+        --dim: #9494a3;
+        --rule: #2a2a3a;
+        --link: #66e0b4;
+        --bg: #0a0a0f;
+        --code: #1a1a25;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--fg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        Helvetica, Arial, sans-serif;
+      font-size: 16px;
+      line-height: 1.65;
+    }
+    main { max-width: 720px; margin: 0 auto; padding: 48px 24px 96px; }
+    header { padding-bottom: 24px; border-bottom: 1px solid var(--rule); margin-bottom: 32px; }
+    h1 { font-size: 28px; margin: 0 0 8px; letter-spacing: -0.01em; }
+    h2 { font-size: 18px; margin: 32px 0 8px; letter-spacing: -0.01em; }
+    .meta { color: var(--dim); font-size: 14px; }
+    p { margin: 12px 0; }
+    a { color: var(--link); text-decoration: underline; text-underline-offset: 3px; }
+    ol { padding-left: 22px; }
+    li { margin: 6px 0; }
+    code, .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+      background: var(--code);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    .callout {
+      border-left: 3px solid var(--link);
+      background: var(--code);
+      padding: 14px 16px;
+      border-radius: 6px;
+      margin: 20px 0;
+    }
+    footer {
+      margin-top: 56px;
+      padding-top: 24px;
+      border-top: 1px solid var(--rule);
+      color: var(--dim);
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Delete Your Muzo Account</h1>
+      <p class="meta">Last updated April 27, 2026</p>
+    </header>
+
+    <p>
+      You can permanently delete your Muzo account and all associated data
+      at any time. There are two ways to do this — pick whichever is
+      easier for you.
+    </p>
+
+    <h2>Option 1 — Delete from inside the app (recommended)</h2>
+    <ol>
+      <li>Open the Muzo app on your phone.</li>
+      <li>Tap the <strong>Settings</strong> icon (top-right of the home screen).</li>
+      <li>Scroll to the bottom and tap <strong>Delete Account</strong>.</li>
+      <li>Confirm. Your account and all associated data will be permanently
+        removed from our servers immediately.</li>
+    </ol>
+
+    <h2>Option 2 — Email request</h2>
+    <p>
+      If you can no longer access the app or prefer to delete by email,
+      send a request to
+      <a href="mailto:contact@cliprr.io?subject=Delete%20my%20Muzo%20account">contact@cliprr.io</a>
+      from the email address associated with your Muzo account.
+    </p>
+    <p>
+      Include the subject line <span class="mono">Delete my Muzo account</span>.
+      We will confirm receipt within 1 business day and complete the
+      deletion within 7 business days.
+    </p>
+
+    <h2>What gets deleted</h2>
+    <p>
+      Once you confirm deletion (in-app or by email), the following data is
+      permanently removed:
+    </p>
+    <ol>
+      <li>Your account record (email, display name, password hash).</li>
+      <li>All chats you've created and the reply suggestions generated for them.</li>
+      <li>All generation history and usage records associated with your account.</li>
+      <li>Your push notification token (you'll stop receiving notifications immediately).</li>
+      <li>Any active or queued background jobs (e.g. in-progress generations).</li>
+    </ol>
+
+    <h2>What is retained</h2>
+    <p>
+      For tax and accounting purposes, payment records held by Apple or
+      Google (the parties that processed any subscription payments) may be
+      retained by them according to their own retention policies. Muzo does
+      not store payment information directly.
+    </p>
+    <p>
+      Anonymized, aggregated logs (which contain no personally identifying
+      information and cannot be linked to your account once deleted) may be
+      retained for up to 90 days for security and abuse-prevention purposes.
+    </p>
+
+    <h2>Subscription cancellation</h2>
+    <div class="callout">
+      <strong>Important:</strong> Deleting your Muzo account does
+      <em>not</em> automatically cancel an active App Store or Google Play
+      subscription. To cancel a subscription, you must do so through your
+      App Store / Play Store subscription settings <em>before</em> deleting
+      your account.
+    </div>
+    <p>
+      Cancellation links:
+    </p>
+    <ol>
+      <li>
+        <strong>iOS:</strong>
+        <a href="https://apps.apple.com/account/subscriptions">
+          apps.apple.com/account/subscriptions
+        </a>
+      </li>
+      <li>
+        <strong>Android:</strong>
+        <a href="https://play.google.com/store/account/subscriptions">
+          play.google.com/store/account/subscriptions
+        </a>
+      </li>
+    </ol>
+
+    <h2>Need help?</h2>
+    <p>
+      Contact us anytime at
+      <a href="mailto:contact@cliprr.io">contact@cliprr.io</a>.
+      We typically respond within 24 hours.
+    </p>
+
+    <footer>
+      © 2026 Cliprr · Muzo ·
+      <a href="/muzo/privacy.html">Privacy Policy</a> ·
+      <a href="/muzo/terms.html">Terms of Service</a>
+    </footer>
+  </main>
+</body>
+</html>

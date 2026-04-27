@@ -26,4 +26,4 @@ function defaultDevUrl(): string {
 export const API_URL: string =
   process.env.EXPO_PUBLIC_API_URL?.trim() || defaultDevUrl();
 
-export const APP_NAME = "Wingman";
+export const APP_NAME = "Muzo";
