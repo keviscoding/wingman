@@ -7,7 +7,11 @@ import { PaywallSheet } from "../components/PaywallSheet";
 import { AuthProvider, useAuth } from "../lib/auth";
 import { useOnboardingSeen } from "../lib/onboardingState";
 import { checkAndApplyUpdate } from "../lib/otaCheck";
-import { dismissPaywall, usePaywallSignal } from "../lib/paywallStore";
+import {
+  dismissPaywall,
+  isUpsellReason,
+  usePaywallSignal,
+} from "../lib/paywallStore";
 import { registerWithServer } from "../lib/pushNotify";
 import { theme } from "../lib/theme";
 
@@ -96,30 +100,52 @@ export default function RootLayout() {
 
 function RootPaywall() {
   const reason = usePaywallSignal();
+  const upsell = isUpsellReason(reason);
+
+  let pretitle: string | undefined;
+  let title: string | undefined;
+  let subtitle: string | undefined;
+
+  switch (reason) {
+    case "pro_locked_free":
+      pretitle = "PRO TRIAL USED";
+      title = "Out of Pro generations";
+      subtitle = "Pro is paid-only after the free trials. Upgrade to keep going.";
+      break;
+    case "daily_cap_free":
+      title = "Daily limit reached";
+      subtitle = "Free users get 5 replies a day. Upgrade to remove the cap.";
+      break;
+    case "lifetime_trial_exhausted":
+      title = "Free trial complete";
+      subtitle = "You've used all free generations. Upgrade for unlimited.";
+      break;
+    case "daily_cap_paid_pro":
+      pretitle = "PRO DAILY CAP";
+      title = "You're a power user";
+      subtitle =
+        "You've used today's 30 Pro generations. Pro Max unlocks 100/day plus priority queue.";
+      break;
+    case "pro_max_upsell":
+      pretitle = "POWER USER";
+      title = "Ready for Pro Max?";
+      subtitle =
+        "You've been hitting the Pro daily cap. Pro Max gives you 100 Pro replies a day, priority queue, and early features.";
+      break;
+    default:
+      title = undefined;
+      subtitle = undefined;
+  }
+
   return (
     <PaywallSheet
       visible={!!reason}
       onDismiss={dismissPaywall}
       onSubscribe={dismissPaywall}
-      pretitle={reason === "pro_locked_free" ? "PRO TRIAL USED" : undefined}
-      title={
-        reason === "pro_locked_free"
-          ? "Out of Pro generations"
-          : reason === "daily_cap_free"
-            ? "Daily limit reached"
-            : reason === "lifetime_trial_exhausted"
-              ? "Free trial complete"
-              : "Upgrade to Pro"
-      }
-      subtitle={
-        reason === "pro_locked_free"
-          ? "Pro is paid-only after the 2 free trials. Upgrade to keep going."
-          : reason === "daily_cap_free"
-            ? "Free users get a few replies per day. Upgrade to remove the cap."
-            : reason === "lifetime_trial_exhausted"
-              ? "You've used all free generations. Upgrade for unlimited."
-              : "Get unlimited replies, both Fast and Pro modes. Cancel anytime."
-      }
+      pretitle={pretitle}
+      title={title}
+      subtitle={subtitle}
+      upsellMode={upsell}
     />
   );
 }

@@ -488,9 +488,10 @@ def get_user_quota_state(user_id: str) -> dict:
     if user.get("daily_window_start") and (now - user["daily_window_start"]) >= DAILY_WINDOW_S:
         daily_count = 0
         pro_daily = 0
+    plan = user["plan"] or "free"
     return {
         "valid": True,
-        "plan": user["plan"],
+        "plan": plan,
         "lifetime_used": user.get("lifetime_gens_used", 0),
         "daily_used": daily_count,
         "pro_lifetime_used": user.get("pro_lifetime_used", 0),
@@ -502,30 +503,110 @@ def get_user_quota_state(user_id: str) -> dict:
     }
 
 
-# Free tier limits
-FREE_LIFETIME_TRIAL = 8
-FREE_PRO_LIFETIME_TRIAL = 2
-FREE_DAILY_LIMIT = 3
-PAID_DAILY_LIMIT = 200
+# ─────────────── Tier limits ───────────────
+#
+# Free tier is intentionally generous. We need users to form the
+# habit (~5-10 successful uses) BEFORE they hit the paywall, or they
+# bounce. The cost of giving away the trial is dwarfed by LTV from
+# the small percentage who convert.
+#
+# Pro tier is the standard subscription — comfortable for typical
+# heavy users (10-15 generations/day) without abuse risk.
+#
+# Pro Max is the whale tier. ~5-10% of subscribers will self-select
+# here and pay 2x for what feels like unlimited usage.
+
+FREE_LIFETIME_TRIAL = 25         # Quick lifetime trial (was 8)
+FREE_PRO_LIFETIME_TRIAL = 5      # Pro lifetime trial (was 2) — long enough to feel quality
+FREE_DAILY_LIMIT = 5             # Quick generations/day after trial (was 3)
+
+# Paid-tier daily caps. Quick is effectively uncapped on both paid
+# tiers. Pro daily is the meaningful gate that pushes whales to upgrade.
+PAID_DAILY_QUICK = 100           # Quick/day on Pro (typical user uses < 20)
+PAID_DAILY_PRO = 30              # Pro/day on standard Pro
+PRO_MAX_DAILY_QUICK = 200        # Quick/day on Pro Max
+PRO_MAX_DAILY_PRO = 100          # Pro/day on Pro Max — effectively unlimited
+
+# Soft signal: if a user hits any of these thresholds in their daily
+# window, surface the Pro Max upsell prompt in the app. Tuned so it
+# triggers for genuine power users, not casual hitters.
+UPSELL_PROMPT_PRO_DAILY = 25     # 25 of 30 Pro generations used today
+
+
+def _plan_caps(plan: str) -> dict:
+    """Return the per-day caps applicable to a plan tier."""
+    if plan == "pro_max":
+        return {
+            "quick_daily": PRO_MAX_DAILY_QUICK,
+            "pro_daily": PRO_MAX_DAILY_PRO,
+        }
+    if plan == "pro":
+        return {
+            "quick_daily": PAID_DAILY_QUICK,
+            "pro_daily": PAID_DAILY_PRO,
+        }
+    # free
+    return {
+        "quick_daily": FREE_DAILY_LIMIT,
+        "pro_daily": 0,  # free tier never gets daily Pro — only the lifetime trial
+    }
 
 
 def can_generate(user_id: str, mode: str = "fast") -> tuple[bool, str]:
+    """Returns (allowed, reason_if_not). mode is "fast" or "pro".
+
+    Quotas:
+      Free:
+        - mode=fast:  lifetime trial (25) → then 5/day
+        - mode=pro:   lifetime trial only (5) → then locked
+      Pro ($14.99/mo):
+        - mode=fast:  100/day
+        - mode=pro:   30/day
+      Pro Max ($29.99/mo):
+        - mode=fast:  200/day
+        - mode=pro:   100/day
+    """
     q = get_user_quota_state(user_id)
     if not q["valid"]:
         return False, "user_not_found"
-    if q["is_subscribed"]:
-        if q["daily_used"] >= PAID_DAILY_LIMIT:
+
+    plan = q["plan"]
+    is_paid = q["is_subscribed"] and plan in ("pro", "pro_max")
+    caps = _plan_caps(plan if is_paid else "free")
+
+    if is_paid:
+        if mode == "pro":
+            if q["pro_daily_used"] >= caps["pro_daily"]:
+                return False, "daily_cap_paid_pro"
+            return True, ""
+        # fast / quick
+        if q["daily_used"] >= caps["quick_daily"]:
             return False, "daily_cap_paid"
         return True, ""
+
+    # ─── Free tier ───
     if mode == "pro":
         if q["pro_lifetime_used"] < FREE_PRO_LIFETIME_TRIAL:
             return True, ""
         return False, "pro_locked_free"
+    # mode=fast on free
     if q["lifetime_used"] < FREE_LIFETIME_TRIAL:
         return True, ""
     if q["daily_used"] >= FREE_DAILY_LIMIT:
         return False, "daily_cap_free"
     return True, ""
+
+
+def should_show_upsell(user_id: str) -> bool:
+    """True when a Pro user has been hammering the Pro daily cap and
+    would benefit from upgrading to Pro Max. Used by /me to surface
+    a one-time upsell prompt in the app."""
+    q = get_user_quota_state(user_id)
+    if not q.get("valid"):
+        return False
+    if q["plan"] != "pro" or not q["is_subscribed"]:
+        return False
+    return q["pro_daily_used"] >= UPSELL_PROMPT_PRO_DAILY
 
 
 # ─────────────── Chat helpers (NEW; replaces filesystem JSON) ───────────────

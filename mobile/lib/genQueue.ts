@@ -102,9 +102,10 @@ async function runJob(token: string, job: Job, refreshMe?: () => void) {
     if (
       detail === "pro_locked_free" ||
       detail === "daily_cap_free" ||
-      detail === "lifetime_trial_exhausted"
+      detail === "lifetime_trial_exhausted" ||
+      detail === "daily_cap_paid_pro"
     ) {
-      openPaywall(detail);
+      openPaywall(detail as any);
     }
     jobs = jobs.map((j) =>
       j.id === job.id
@@ -171,9 +172,10 @@ async function runJob(token: string, job: Job, refreshMe?: () => void) {
       if (
         detail === "pro_locked_free" ||
         detail === "daily_cap_free" ||
-        detail === "lifetime_trial_exhausted"
+        detail === "lifetime_trial_exhausted" ||
+        detail === "daily_cap_paid_pro"
       ) {
-        openPaywall(detail);
+        openPaywall(detail as any);
       }
       jobs = jobs.map((j) =>
         j.id === job.id

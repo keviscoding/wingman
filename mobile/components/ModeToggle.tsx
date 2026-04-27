@@ -21,9 +21,9 @@ type Props = {
 
 export function ModeToggle({ mode, onChange, size = "default" }: Props) {
   const { me } = useAuth();
-  const isLocked = !!me && !me.is_subscribed && (me.pro_lifetime_used >= (me.free_pro_lifetime_trial ?? 2));
+  const isLocked = !!me && !me.is_subscribed && (me.pro_lifetime_used >= (me.free_pro_lifetime_trial ?? 5));
   const trialLeft = me
-    ? Math.max(0, (me.free_pro_lifetime_trial ?? 2) - (me.pro_lifetime_used ?? 0))
+    ? Math.max(0, (me.free_pro_lifetime_trial ?? 5) - (me.pro_lifetime_used ?? 0))
     : 0;
 
   const px = size === "sm" ? 12 : 16;

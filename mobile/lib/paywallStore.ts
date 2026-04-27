@@ -1,18 +1,16 @@
 // Tiny store that lets ANY screen / hook / queue job ask the paywall
 // sheet to open. The sheet itself lives once at the root layout and
 // subscribes here.
-//
-// Why a module-level store and not Context: the queue runs background
-// async work (`runJob`) that has no React tree to traverse. A
-// pub/sub keeps the API trivial: `openPaywall("pro_locked_free")`.
 
 import { useEffect, useState } from "react";
 
-type PaywallReason =
-  | "pro_locked_free"
-  | "daily_cap_free"
-  | "lifetime_trial_exhausted"
-  | "manual";
+export type PaywallReason =
+  | "pro_locked_free"           // free user tried Pro after trial used up
+  | "daily_cap_free"             // free user hit daily Quick cap
+  | "lifetime_trial_exhausted"   // free user out of lifetime trials entirely
+  | "daily_cap_paid_pro"         // Pro subscriber hit Pro daily cap → suggest Pro Max
+  | "pro_max_upsell"             // server-detected upsell signal
+  | "manual";                    // user tapped Upgrade in settings
 
 let openedReason: PaywallReason | null = null;
 const listeners = new Set<(r: PaywallReason | null) => void>();
@@ -37,4 +35,10 @@ export function usePaywallSignal(): PaywallReason | null {
     };
   }, []);
   return r;
+}
+
+/** Returns true when the paywall reason indicates we should preselect
+ *  Pro Max (whale upsell) instead of the default Pro tier. */
+export function isUpsellReason(r: PaywallReason | null): boolean {
+  return r === "pro_max_upsell" || r === "daily_cap_paid_pro";
 }

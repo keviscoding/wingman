@@ -2,8 +2,9 @@
 // the user stays logged in across app restarts.
 
 import * as SecureStore from "expo-secure-store";
-import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
 import { api, AuthResponse, Me } from "./api";
+import { openPaywall } from "./paywallStore";
 
 type AuthState = {
   loading: boolean;        // true while we hydrate the persisted token
@@ -23,6 +24,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [token, setToken] = useState<string | null>(null);
   const [me, setMe] = useState<Me | null>(null);
+  // Once-per-session guard so we don't keep popping the upsell every
+  // time /me refreshes. Reset when the user signs out.
+  const upsellShown = useRef(false);
 
   const persist = useCallback(async (t: string | null) => {
     if (t) {
@@ -36,6 +40,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const m = await api.me(t);
       setMe(m);
+      // Server says this Pro user has been hammering the daily Pro
+      // cap → surface the upsell once per session.
+      if (m?.should_show_pro_max_upsell && !upsellShown.current) {
+        upsellShown.current = true;
+        openPaywall("pro_max_upsell");
+      }
     } catch {
       // Token rejected — wipe so we go back to login
       await persist(null);
@@ -80,6 +90,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await persist(null);
     setToken(null);
     setMe(null);
+    upsellShown.current = false;
   }, [persist]);
 
   const refreshMe = useCallback(async () => {

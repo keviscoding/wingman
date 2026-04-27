@@ -139,10 +139,16 @@ class MeResponse(BaseModel):
     daily_used: int
     pro_lifetime_used: int = 0
     pro_daily_used: int = 0
+    # Tier-aware caps for mobile UI
+    quick_daily_cap: int = 0
+    pro_daily_cap: int = 0
     free_lifetime_trial: int = db.FREE_LIFETIME_TRIAL
     free_pro_lifetime_trial: int = db.FREE_PRO_LIFETIME_TRIAL
     free_daily_limit: int = db.FREE_DAILY_LIMIT
-    paid_daily_limit: int = db.PAID_DAILY_LIMIT
+    paid_daily_limit: int = db.PAID_DAILY_QUICK
+    # Server-detected upsell — true when a Pro user has been
+    # consistently hitting the Pro daily cap.
+    should_show_pro_max_upsell: bool = False
 
 
 class PushTokenRequest(BaseModel):
@@ -210,17 +216,23 @@ async def delete_me(user: Annotated[dict, Depends(current_user)]):
 @router.get("/me", response_model=MeResponse)
 async def me(user: Annotated[dict, Depends(current_user)]):
     q = db.get_user_quota_state(user["id"])
+    plan = q["plan"]
+    is_paid = q["is_subscribed"] and plan in ("pro", "pro_max")
+    caps = db._plan_caps(plan if is_paid else "free")
     return MeResponse(
         user_id=user["id"],
         email=user["email"],
         display_name=user.get("display_name"),
-        plan=user["plan"],
+        plan=plan,
         is_subscribed=q["is_subscribed"],
         subscription_until=q.get("subscription_until"),
         lifetime_used=q["lifetime_used"],
         daily_used=q["daily_used"],
         pro_lifetime_used=q.get("pro_lifetime_used", 0),
         pro_daily_used=q.get("pro_daily_used", 0),
+        quick_daily_cap=caps["quick_daily"],
+        pro_daily_cap=caps["pro_daily"],
+        should_show_pro_max_upsell=db.should_show_upsell(user["id"]),
     )
 
 
@@ -534,6 +546,7 @@ async def reply_copied(
 class AdminUpgradeRequest(BaseModel):
     email: EmailStr
     days: int = 365
+    plan: str = "pro"  # "pro" or "pro_max"
 
 
 def _admin_token(authorization: Annotated[str | None, Header()] = None) -> str | None:
@@ -572,10 +585,11 @@ async def admin_upgrade(
     user = db.get_user_by_email(body.email)
     if not user:
         raise HTTPException(status_code=404, detail="user_not_found")
+    plan = body.plan if body.plan in ("pro", "pro_max") else "pro"
     until = int(time.time()) + body.days * 24 * 3600
     with db.connect() as conn:
         conn.execute(
-            "UPDATE users SET plan = 'pro', subscription_until = ? WHERE id = ?",
-            (until, user["id"]),
+            "UPDATE users SET plan = ?, subscription_until = ? WHERE id = ?",
+            (plan, until, user["id"]),
         )
-    return {"ok": True, "email": body.email, "subscription_until": until}
+    return {"ok": True, "email": body.email, "plan": plan, "subscription_until": until}

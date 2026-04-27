@@ -71,23 +71,25 @@ def _seed_persistent_account() -> None:
         pw_hash = auth.hash_password(password)
         until = int(_time.time()) + 365 * 24 * 3600
 
+        # Seed account is always Pro Max so the operator can test
+        # unconstrained — paid limits don't get in the way of QA.
         if existing:
             with db.connect() as conn:
                 conn.execute(
-                    "UPDATE users SET password_hash = ?, plan = 'pro', "
+                    "UPDATE users SET password_hash = ?, plan = 'pro_max', "
                     "subscription_until = ? WHERE id = ?",
                     (pw_hash, until, existing["id"]),
                 )
-            print(f"[seed] Refreshed Pro account: {email}")
+            print(f"[seed] Refreshed Pro Max account: {email}")
         else:
-            user = db.create_user(email, pw_hash, display_name="Pro")
+            user = db.create_user(email, pw_hash, display_name="Pro Max")
             with db.connect() as conn:
                 conn.execute(
-                    "UPDATE users SET plan = 'pro', subscription_until = ? "
+                    "UPDATE users SET plan = 'pro_max', subscription_until = ? "
                     "WHERE id = ?",
                     (until, user["id"]),
                 )
-            print(f"[seed] Created Pro account: {email}")
+            print(f"[seed] Created Pro Max account: {email}")
     except Exception as exc:
         print(f"[seed] Failed: {exc}")
 

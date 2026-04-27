@@ -36,21 +36,29 @@ export type ChatSummary = {
   last_copied_angle?: string | null;
 };
 
+export type PlanTier = "free" | "pro" | "pro_max";
+
 export type Me = {
   user_id: string;
   email: string;
   display_name: string | null;
-  plan: string;
+  plan: PlanTier;
   is_subscribed: boolean;
   subscription_until: number | null;
   lifetime_used: number;
   daily_used: number;
   pro_lifetime_used: number;
   pro_daily_used: number;
+  // Tier-aware caps so the badge / paywall can show accurate copy
+  quick_daily_cap: number;
+  pro_daily_cap: number;
   free_lifetime_trial: number;
   free_pro_lifetime_trial: number;
   free_daily_limit: number;
   paid_daily_limit: number;
+  // Server-detected upsell signal — true when a Pro user has been
+  // hammering the Pro daily cap and would benefit from Pro Max.
+  should_show_pro_max_upsell: boolean;
 };
 
 export type GenerationMode = "fast" | "pro";
