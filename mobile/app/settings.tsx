@@ -9,6 +9,7 @@ import { Alert, Platform, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api, ApiError } from "../lib/api";
 import { useAuth } from "../lib/auth";
+import { openPaywall } from "../lib/paywallStore";
 import { registerWithServer } from "../lib/pushNotify";
 import { theme } from "../lib/theme";
 import { Pressable, TopBar } from "../components/ui";
@@ -148,11 +149,31 @@ export default function SettingsScreen() {
                   fontWeight: theme.fontWeights.bold,
                 }}
               >
-                {me?.is_subscribed ? "Pro" : "Free"}
+                {me?.plan === "pro_max"
+                  ? "Pro Max"
+                  : me?.plan === "pro"
+                    ? "Pro"
+                    : "Free"}
               </Text>
             }
-            chevron
           />
+          {!me?.is_subscribed ? (
+            <Row
+              label="Upgrade to Pro"
+              detail={
+                <Text
+                  style={{
+                    color: theme.accent,
+                    fontWeight: theme.fontWeights.bold,
+                  }}
+                >
+                  Open
+                </Text>
+              }
+              chevron
+              onPress={() => openPaywall("manual")}
+            />
+          ) : null}
           <Row
             label="Manage subscription"
             chevron
