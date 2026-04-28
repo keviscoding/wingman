@@ -7,6 +7,25 @@
   "client": [
     {
       "client_info": {
+        "mobilesdk_app_id": "1:1093163176498:android:a65b47fa83b8a58d00a22b",
+        "android_client_info": {
+          "package_name": "app.muzo.mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC_DAaLoWZ17SmmcJqVtJYgqbf18er_k4E"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
         "mobilesdk_app_id": "1:1093163176498:android:6c42de5bab61447800a22b",
         "android_client_info": {
           "package_name": "app.wingman.mobile"

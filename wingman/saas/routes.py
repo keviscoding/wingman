@@ -505,6 +505,40 @@ async def regenerate(
     return result
 
 
+class LockedContextRequest(BaseModel):
+    locked_context: str = ""
+    enabled: bool = True
+
+
+@router.patch("/chats/{chat_id}/context")
+async def set_locked_context(
+    chat_id: str,
+    body: LockedContextRequest,
+    user: Annotated[dict, Depends(current_user)],
+):
+    """Pin a piece of context to a specific chat so it auto-merges into
+    every future generation for that chat (regenerate + new
+    screenshots). Lets the user type "she's vegan, has a Pomeranian
+    named Biscuit" once and have Muzo remember forever.
+
+    Sending ``enabled=False`` disables the lock without deleting the
+    text — toggle in/out without re-typing.
+    Sending ``locked_context=""`` clears it entirely.
+    """
+    chat = db.chat_load(user["id"], chat_id)
+    if not chat:
+        raise HTTPException(status_code=404, detail="chat_not_found")
+    meta = dict(chat.get("meta") or {})
+    meta["locked_context"] = (body.locked_context or "").strip()
+    meta["locked_context_enabled"] = bool(body.enabled and meta["locked_context"])
+    db.chat_save_meta(user["id"], chat_id, meta)
+    return {
+        "ok": True,
+        "locked_context": meta["locked_context"],
+        "locked_context_enabled": meta["locked_context_enabled"],
+    }
+
+
 @router.delete("/chats/{chat_id}")
 async def delete_chat(
     chat_id: str,

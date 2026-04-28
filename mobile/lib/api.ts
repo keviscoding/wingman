@@ -180,6 +180,26 @@ export const api = {
     });
   },
 
+  /** Pin (or unpin) a context note on a chat. Locked context auto-merges
+   *  into every future generation for the chat — both regenerations and
+   *  follow-up screenshots from the same conversation. */
+  async setLockedContext(
+    token: string,
+    id: string,
+    locked_context: string,
+    enabled: boolean,
+  ): Promise<{
+    ok: boolean;
+    locked_context: string;
+    locked_context_enabled: boolean;
+  }> {
+    return request(`/api/v1/chats/${encodeURIComponent(id)}/context`, {
+      method: "PATCH",
+      token,
+      body: JSON.stringify({ locked_context, enabled }),
+    });
+  },
+
   async regenerate(
     token: string,
     id: string,

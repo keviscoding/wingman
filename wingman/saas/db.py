@@ -516,9 +516,9 @@ def get_user_quota_state(user_id: str) -> dict:
 # Pro Max is the whale tier. ~5-10% of subscribers will self-select
 # here and pay 2x for what feels like unlimited usage.
 
-FREE_LIFETIME_TRIAL = 25         # Quick lifetime trial (was 8)
-FREE_PRO_LIFETIME_TRIAL = 5      # Pro lifetime trial (was 2) — long enough to feel quality
-FREE_DAILY_LIMIT = 5             # Quick generations/day after trial (was 3)
+FREE_LIFETIME_TRIAL = 10         # Quick lifetime trial (tightened from 25 → 10)
+FREE_PRO_LIFETIME_TRIAL = 3      # Pro lifetime trial (tightened from 5 → 3)
+FREE_DAILY_LIMIT = 2             # Quick generations/day after trial (tightened from 5 → 2)
 
 # Paid-tier daily caps. Quick is effectively uncapped on both paid
 # tiers. Pro daily is the meaningful gate that pushes whales to upgrade.

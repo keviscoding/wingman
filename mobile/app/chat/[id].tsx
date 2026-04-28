@@ -37,6 +37,10 @@ type ChatDetail = {
   replies: ReplyOption[];
   read?: string;
   advice?: string;
+  /** User-pinned context that auto-merges into every regen +
+   *  follow-up screenshot for this chat. */
+  locked_context?: string;
+  locked_context_enabled?: boolean;
 };
 
 export default function ChatDetailScreen() {
@@ -73,6 +77,12 @@ export default function ChatDetailScreen() {
   const [regenerating, setRegenerating] = useState(false);
   const [extra, setExtra] = useState("");
   const [showExtra, setShowExtra] = useState(false);
+  // Locked context — pinned to this chat, auto-merges into every
+  // regen + follow-up screenshot so the user types it once.
+  const [lockedDraft, setLockedDraft] = useState("");
+  const [lockedSaved, setLockedSaved] = useState(false);
+  const [showLocked, setShowLocked] = useState(false);
+  const [savingLock, setSavingLock] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useMode();
 
@@ -87,6 +97,15 @@ export default function ChatDetailScreen() {
       try {
         const r = await api.getChat(token, id);
         setData(r);
+        // Hydrate the locked-context inputs from the server response.
+        // Don't clobber whatever the user is currently typing.
+        if (typeof r?.locked_context === "string") {
+          setLockedDraft(r.locked_context);
+          setLockedSaved(!!r.locked_context_enabled);
+          // Auto-expand the section so the user sees the lock state
+          // without an extra tap if they have one configured.
+          if (r.locked_context_enabled) setShowLocked(true);
+        }
       } catch (e: any) {
         setError(e instanceof ApiError ? e.detail : e?.message || "error");
       } finally {
@@ -156,6 +175,36 @@ export default function ChatDetailScreen() {
   const trackCopy = (label: string, text: string) => {
     if (token && id) {
       api.copyReply(token, id, label, text).catch(() => {});
+    }
+  };
+
+  const onSaveLocked = async () => {
+    if (!token || !id || savingLock) return;
+    setSavingLock(true);
+    try {
+      const trimmed = lockedDraft.trim();
+      const r = await api.setLockedContext(token, id, trimmed, true);
+      setLockedDraft(r.locked_context);
+      setLockedSaved(r.locked_context_enabled);
+    } catch (e: any) {
+      const detail = e instanceof ApiError ? e.detail : "request_failed";
+      Alert.alert("Couldn't save", prettyDetail(detail));
+    } finally {
+      setSavingLock(false);
+    }
+  };
+
+  const onClearLocked = async () => {
+    if (!token || !id || savingLock) return;
+    setSavingLock(true);
+    try {
+      await api.setLockedContext(token, id, "", false);
+      setLockedDraft("");
+      setLockedSaved(false);
+    } catch {
+      // Swallow — clearing is non-critical.
+    } finally {
+      setSavingLock(false);
     }
   };
 
@@ -383,6 +432,113 @@ export default function ChatDetailScreen() {
                 </View>
               )}
 
+              {/* Locked context — pinned to the chat. Auto-merges into
+                  every regen + follow-up screenshot for this contact. */}
+              <Pressable onPress={() => setShowLocked((s) => !s)}>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    backgroundColor: lockedSaved ? theme.accentDim : theme.surface,
+                    borderWidth: 1,
+                    borderColor: lockedSaved ? theme.accent : theme.border,
+                    borderRadius: theme.radii.md,
+                    paddingHorizontal: theme.spacing.md + 2,
+                    paddingVertical: 10,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: lockedSaved ? theme.accent : theme.dim,
+                      fontSize: 14,
+                      fontWeight: theme.fontWeights.semibold,
+                    }}
+                  >
+                    {lockedSaved ? "🔒 Locked context · saved" : "🔒 Lock context for this chat"}
+                  </Text>
+                  <Text
+                    style={{
+                      color: lockedSaved ? theme.accent : theme.dimmer,
+                      fontSize: 12,
+                    }}
+                  >
+                    {showLocked ? "Close" : lockedSaved ? "Edit" : "Optional"}
+                  </Text>
+                </View>
+              </Pressable>
+
+              {showLocked ? (
+                <View style={{ gap: theme.spacing.sm }}>
+                  <TextInput
+                    placeholder="e.g. she's the climber from Hinge, vegan, allergic to cats"
+                    placeholderTextColor={theme.dimmer}
+                    value={lockedDraft}
+                    onChangeText={setLockedDraft}
+                    multiline
+                    style={{
+                      backgroundColor: theme.surface,
+                      borderRadius: theme.radii.md,
+                      borderWidth: 1,
+                      borderColor: theme.border,
+                      color: theme.text,
+                      fontSize: theme.fontSizes.md,
+                      padding: theme.spacing.md,
+                      minHeight: 80,
+                      textAlignVertical: "top",
+                    }}
+                  />
+                  <Text
+                    style={{
+                      color: theme.dimmer,
+                      fontSize: 12,
+                      lineHeight: 18,
+                    }}
+                  >
+                    Saved here, auto-applied to every reply Muzo writes for
+                    this chat — including new screenshots of the same conversation.
+                  </Text>
+                  <View style={{ flexDirection: "row", gap: theme.spacing.sm }}>
+                    <View style={{ flex: 1 }}>
+                      <PrimaryButton
+                        label={
+                          savingLock
+                            ? "Saving…"
+                            : lockedSaved
+                              ? "Update"
+                              : "Save & lock"
+                        }
+                        onPress={onSaveLocked}
+                        disabled={savingLock || !lockedDraft.trim()}
+                      />
+                    </View>
+                    {lockedSaved ? (
+                      <Pressable onPress={onClearLocked}>
+                        <View
+                          style={{
+                            paddingHorizontal: theme.spacing.md,
+                            paddingVertical: 12,
+                            borderRadius: theme.radii.md,
+                            borderWidth: 1,
+                            borderColor: theme.border,
+                          }}
+                        >
+                          <Text
+                            style={{
+                              color: theme.dim,
+                              fontSize: 14,
+                              fontWeight: theme.fontWeights.semibold,
+                            }}
+                          >
+                            Clear
+                          </Text>
+                        </View>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                </View>
+              ) : null}
+
               <Pressable onPress={() => setShowExtra((s) => !s)}>
                 <View
                   style={{
@@ -404,7 +560,7 @@ export default function ChatDetailScreen() {
                       fontWeight: theme.fontWeights.semibold,
                     }}
                   >
-                    + Add extra context
+                    + Add extra context (one-time)
                   </Text>
                   <Text style={{ color: theme.dimmer, fontSize: 12 }}>
                     {showExtra ? "Close" : "Optional"}

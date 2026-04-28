@@ -124,6 +124,30 @@ async def _extract_chat_from_image(img_bytes: bytes) -> tuple[str, list[dict]]:
     return "", []
 
 
+def _merge_locked_context(meta: dict | None, extra_context: str) -> str:
+    """If the chat has a locked context pinned (and locked is enabled),
+    prepend it to whatever extra_context the caller passed in.
+
+    Locked context is set via PATCH /chats/{id}/context. It persists in
+    chat.meta_json so it follows the chat across regenerations and
+    follow-up screenshots — the user types "she's the climber from
+    Hinge, vegan, allergic to cats" once and Muzo remembers it for
+    every future generation in that chat.
+    """
+    if not meta:
+        return (extra_context or "").strip()
+    locked = (meta.get("locked_context") or "").strip()
+    enabled = bool(meta.get("locked_context_enabled"))
+    if not locked or not enabled:
+        return (extra_context or "").strip()
+    extra = (extra_context or "").strip()
+    if not extra:
+        return locked
+    # Locked context first (background) then session-specific context
+    # (foreground) so the immediate ask wins on contradictions.
+    return f"{locked}\n\n{extra}"
+
+
 def record_reply_copy(ctx: UserContext, chat_id: str, label: str, text: str) -> None:
     """Stash the last-copied angle on the chat row so the chats list
     can show 'BOLD · last copied' — quick visual recall of which
@@ -187,6 +211,8 @@ def get_chat_for_user(ctx: UserContext, chat_id: str) -> dict | None:
         "replies": meta.get("last_replies", []),
         "read": meta.get("last_read", ""),
         "advice": meta.get("last_advice", ""),
+        "locked_context": meta.get("locked_context", ""),
+        "locked_context_enabled": bool(meta.get("locked_context_enabled")),
     }
 
 
@@ -233,18 +259,24 @@ async def quick_capture_for_user(
             have.add(key)
     db.chat_save(ctx.user_id, contact_name, appended, existing_meta)
 
+    # Merge any locked context the user previously pinned to this chat.
+    # Locked context lives in chat meta and persists across screenshots /
+    # regenerations so the user doesn't have to re-type "she's the
+    # girl from the gym, super into climbing" every time.
+    merged_context = _merge_locked_context(existing_meta, extra_context)
+
     # Step 3: generate replies — route by mode
     conv = ConversationState()
     conv.ingest_parsed_messages(appended)
 
     if mode == "pro":
         replies, read, advice, model_tag, cost = await _generate_pro_for_user_messages(
-            ctx, conv.messages, extra_context=extra_context,
+            ctx, conv.messages, extra_context=merged_context,
             img_bytes=img_bytes,
         )
     else:
         replies, read, advice, model_tag, cost = await _generate_for_user_messages(
-            ctx, conv.messages, extra_context=extra_context,
+            ctx, conv.messages, extra_context=merged_context,
         )
 
     # Step 4: persist replies on the chat meta
@@ -280,13 +312,15 @@ async def regenerate_for_user(
         raise KeyError(chat_id)
     conv = ConversationState()
     conv.ingest_parsed_messages(chat["messages"])
+    # Same locked-context merge as quick-capture — see helper.
+    merged_context = _merge_locked_context(chat["meta"], extra_context)
     if mode == "pro":
         replies, read, advice, model_tag, cost = await _generate_pro_for_user_messages(
-            ctx, conv.messages, extra_context=extra_context,
+            ctx, conv.messages, extra_context=merged_context,
         )
     else:
         replies, read, advice, model_tag, cost = await _generate_for_user_messages(
-            ctx, conv.messages, extra_context=extra_context,
+            ctx, conv.messages, extra_context=merged_context,
         )
     meta = chat["meta"]
     meta["last_replies"] = replies
