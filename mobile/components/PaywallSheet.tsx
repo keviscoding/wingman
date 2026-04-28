@@ -119,7 +119,7 @@ export function PaywallSheet({
   pretitle,
   title,
   subtitle,
-  cta = "Start 7-day free trial",
+  cta = "Subscribe",
   upsellMode = false,
 }: Props) {
   const { refreshMe } = useAuth();
@@ -380,14 +380,25 @@ export function PaywallSheet({
           </View>
 
           <View style={{ gap: 10 }}>
-            {PLANS.map((p) => (
-              <PlanCard
-                key={p.id}
-                plan={p}
-                selected={selected === p.id}
-                onSelect={() => setSelected(p.id)}
-              />
-            ))}
+            {PLANS.map((p) => {
+              // Look up the matching RC package so we can show the
+              // user the localized price right on the card. If the
+              // offering hasn't loaded yet (network slow / RC sync
+              // delay), the card just doesn't show a price — better
+              // than showing a wrong fallback.
+              const pkg = offering?.availablePackages.find(
+                (x) => x.product.identifier === p.id,
+              );
+              return (
+                <PlanCard
+                  key={p.id}
+                  plan={p}
+                  priceString={pkg?.product.priceString}
+                  selected={selected === p.id}
+                  onSelect={() => setSelected(p.id)}
+                />
+              );
+            })}
           </View>
 
           <Text
@@ -398,7 +409,7 @@ export function PaywallSheet({
               lineHeight: 18,
             }}
           >
-            7-day free trial · cancel anytime in your store · auto-renews
+            Cancel anytime in your store · auto-renews
           </Text>
 
           <PrimaryButton
@@ -438,14 +449,21 @@ export function PaywallSheet({
 
 function PlanCard({
   plan,
+  priceString,
   selected,
   onSelect,
 }: {
   plan: Plan;
+  /** Localized price string from the Play store (e.g. "$4.99",
+   *  "£3.99", "€4.99"). Optional — if the RC offering hasn't
+   *  loaded yet we just don't show a price. */
+  priceString?: string;
   selected: boolean;
   onSelect: () => void;
 }) {
   const isHighlight = !!plan.highlight;
+  // Period suffix shown next to the price ("/wk" or "/yr")
+  const periodSuffix = plan.id.endsWith("yearly") ? " / yr" : " / wk";
   return (
     <Pressable onPress={onSelect}>
       <View
@@ -490,15 +508,43 @@ function PlanCard({
           </View>
         ) : null}
 
-        <Text
+        <View
           style={{
-            color: theme.text,
-            fontSize: theme.fontSizes.lg,
-            fontWeight: theme.fontWeights.bold,
+            flexDirection: "row",
+            justifyContent: "space-between",
+            alignItems: "baseline",
           }}
         >
-          {plan.title}
-        </Text>
+          <Text
+            style={{
+              color: theme.text,
+              fontSize: theme.fontSizes.lg,
+              fontWeight: theme.fontWeights.bold,
+            }}
+          >
+            {plan.title}
+          </Text>
+          {priceString ? (
+            <Text
+              style={{
+                color: selected || isHighlight ? theme.accent : theme.text,
+                fontSize: theme.fontSizes.lg,
+                fontWeight: theme.fontWeights.bold,
+              }}
+            >
+              {priceString}
+              <Text
+                style={{
+                  color: theme.dim,
+                  fontSize: theme.fontSizes.sm,
+                  fontWeight: theme.fontWeights.medium,
+                }}
+              >
+                {periodSuffix}
+              </Text>
+            </Text>
+          ) : null}
+        </View>
 
         <Text
           style={{

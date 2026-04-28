@@ -65,6 +65,35 @@ export function enqueueJob(input: {
   mode?: GenerationMode;
   refreshMe?: () => void;
 }): Job {
+  // Dedup guard. If the same screenshot is already in-flight (queued
+  // or running) we return the existing job rather than fan out into
+  // multiple parallel uploads. This was triggering when a user took a
+  // screenshot in another app and returned to Muzo — both AppState
+  // 'active' and useFocusEffect would fire scan(true) close together,
+  // and although we have a scanInFlight ref, occasional timing
+  // variance let two enqueueJob calls slip through with the same
+  // MediaLibrary asset id. Catching it here is robust regardless.
+  if (input.screenshotId) {
+    const existing = jobs.find(
+      (j) =>
+        j.screenshotId === input.screenshotId &&
+        (j.status === "queued" || j.status === "running"),
+    );
+    if (existing) return existing;
+  }
+  // Also dedup against same URI within the last 2s — covers the
+  // manual-pick path where there's no MediaLibrary id but the same
+  // file URI gets passed twice in quick succession.
+  if (!input.screenshotId) {
+    const recent = jobs.find(
+      (j) =>
+        j.uri === input.uri &&
+        (j.status === "queued" || j.status === "running") &&
+        Date.now() - j.startedAt < 2000,
+    );
+    if (recent) return recent;
+  }
+
   const job: Job = {
     id: uuid(),
     uri: input.uri,
