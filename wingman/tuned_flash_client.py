@@ -23,8 +23,12 @@ from pathlib import Path
 from typing import Awaitable, Callable
 
 
-PROJECT = "nicheflix-cd240"
-LOCATION = "us-central1"
+# Project + location for the tuned endpoint. Defaults to the
+# NicheFlix Vertex project where v1-v4 were trained. Both are
+# env-overridable so we can re-train into a different project later
+# (or use cross-project access) without code changes.
+PROJECT = (os.getenv("TUNED_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT") or "nicheflix-cd240").strip()
+LOCATION = (os.getenv("TUNED_LOCATION") or "us-central1").strip()
 
 # Tuned model endpoints — we keep v1, v2, v3 all registered so the UI
 # can flip between them for A/B testing without redeploying anything.
