@@ -593,3 +593,137 @@ async def admin_upgrade(
             (plan, until, user["id"]),
         )
     return {"ok": True, "email": body.email, "plan": plan, "subscription_until": until}
+
+
+# ---------------------------------------------------------------------------
+# RevenueCat webhook — receives real-time purchase events from Play / App
+# Store via RevenueCat. Maps RC entitlements -> users.plan in Postgres so
+# the mobile app's /me reflects the new subscription state immediately.
+# ---------------------------------------------------------------------------
+#
+# RC sends one event per state change: INITIAL_PURCHASE, RENEWAL,
+# CANCELLATION, EXPIRATION, NON_RENEWING_PURCHASE, BILLING_ISSUE,
+# PRODUCT_CHANGE, TRANSFER, etc.
+#
+# We map these to two mutations on the users table:
+#   - When entitlement is active  → set plan = 'pro' or 'pro_max',
+#                                   set subscription_until = expires_at
+#   - When entitlement expires    → set plan = 'free', clear sub_until
+#
+# RC posts JSON like:
+#   {
+#     "event": {
+#       "type": "INITIAL_PURCHASE",
+#       "app_user_id": "<our user_id>",
+#       "product_id": "pro_max_weekly",
+#       "entitlement_ids": ["pro_max"],
+#       "expiration_at_ms": 1750000000000,
+#       ...
+#     }
+#   }
+#
+# Auth: RC signs every request with a configurable Bearer token in
+# the Authorization header. Set REVENUECAT_WEBHOOK_TOKEN to match
+# whatever you configured in the RC dashboard. We reject any request
+# without the matching token to prevent spoofing.
+
+class RevenueCatEvent(BaseModel):
+    event: dict
+
+
+def _verify_rc_token(authorization: Annotated[str | None, Header()] = None) -> None:
+    import os
+    expected = (os.getenv("REVENUECAT_WEBHOOK_TOKEN") or "").strip()
+    if not expected:
+        # Webhook not configured server-side — fail open in dev so
+        # we can test, but log loudly so we notice.
+        print("[rc-webhook] REVENUECAT_WEBHOOK_TOKEN not set — accepting all events")
+        return
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="bad_rc_token")
+    token = authorization.split(None, 1)[1].strip()
+    if token != expected:
+        raise HTTPException(status_code=401, detail="bad_rc_token")
+
+
+def _plan_from_entitlements(ent_ids: list[str]) -> str | None:
+    """Pick the highest tier the user is entitled to.
+
+    Pro Max wins over Pro if both are somehow active simultaneously
+    (shouldn't happen in practice but defend against it).
+    """
+    if "pro_max" in ent_ids:
+        return "pro_max"
+    if "pro" in ent_ids:
+        return "pro"
+    return None
+
+
+@router.post("/webhooks/revenuecat")
+async def revenuecat_webhook(
+    body: RevenueCatEvent,
+    _auth: Annotated[None, Depends(_verify_rc_token)],
+):
+    e = body.event or {}
+    event_type = (e.get("type") or "").upper()
+    user_id = e.get("app_user_id") or ""
+    ent_ids = list(e.get("entitlement_ids") or [])
+    expires_ms = e.get("expiration_at_ms")
+    product_id = e.get("product_id") or ""
+
+    print(
+        f"[rc-webhook] type={event_type} user={user_id} ent={ent_ids} "
+        f"product={product_id} expires_ms={expires_ms}"
+    )
+
+    if not user_id:
+        # Anonymous events (e.g. TEST events RC sends to verify the
+        # webhook URL) — accept and no-op.
+        return {"ok": True, "noop": "no_user_id"}
+
+    user = db.get_user_by_id(user_id)
+    if not user:
+        # Probably a test event with a fake user id, or a user we
+        # deleted. Don't 500 — RC retries on 5xx.
+        return {"ok": True, "noop": "user_not_found"}
+
+    # Active entitlement events → upgrade the plan
+    active_events = {
+        "INITIAL_PURCHASE",
+        "RENEWAL",
+        "PRODUCT_CHANGE",
+        "UNCANCELLATION",
+        "NON_RENEWING_PURCHASE",
+        "TRANSFER",
+    }
+    # Inactive events → demote to free
+    inactive_events = {
+        "EXPIRATION",
+        "CANCELLATION",  # user cancelled — RC sends CANCELLATION
+                         # but the entitlement stays active until
+                         # EXPIRATION, so we don't actually demote here.
+                         # Keeping this here for future logic; for now
+                         # only EXPIRATION demotes.
+        "SUBSCRIPTION_PAUSED",
+    }
+
+    if event_type in active_events:
+        plan = _plan_from_entitlements(ent_ids) or "pro"
+        until = int(expires_ms / 1000) if expires_ms else None
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE users SET plan = ?, subscription_until = ? WHERE id = ?",
+                (plan, until, user_id),
+            )
+        print(f"[rc-webhook] -> set plan={plan} until={until} for {user_id}")
+    elif event_type == "EXPIRATION":
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE users SET plan = 'free', subscription_until = NULL WHERE id = ?",
+                (user_id,),
+            )
+        print(f"[rc-webhook] -> demoted to free for {user_id}")
+    # else: BILLING_ISSUE, CANCELLATION (intent only), TEST, etc.
+    # No mutation needed — entitlement stays active until EXPIRATION.
+
+    return {"ok": True, "event": event_type, "user_id": user_id}

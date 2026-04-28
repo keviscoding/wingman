@@ -5,6 +5,7 @@ import * as SecureStore from "expo-secure-store";
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
 import { api, AuthResponse, Me } from "./api";
 import { openPaywall } from "./paywallStore";
+import * as iap from "./iap";
 
 type AuthState = {
   loading: boolean;        // true while we hydrate the persisted token
@@ -40,6 +41,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const m = await api.me(t);
       setMe(m);
+      // Tell RevenueCat which user this device belongs to so purchases
+      // follow the user across devices and platforms. No-op if RC
+      // isn't initialised yet (boot() is called once at app mount).
+      iap.identify(m.user_id).catch(() => {});
       // Server says this Pro user has been hammering the daily Pro
       // cap → surface the upsell once per session.
       if (m?.should_show_pro_max_upsell && !upsellShown.current) {
@@ -91,6 +96,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setToken(null);
     setMe(null);
     upsellShown.current = false;
+    // Forget this user in RC so the next login gets a clean identity.
+    iap.forget().catch(() => {});
   }, [persist]);
 
   const refreshMe = useCallback(async () => {

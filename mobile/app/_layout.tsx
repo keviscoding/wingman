@@ -13,6 +13,7 @@ import {
   usePaywallSignal,
 } from "../lib/paywallStore";
 import { registerWithServer } from "../lib/pushNotify";
+import * as iap from "../lib/iap";
 import { theme } from "../lib/theme";
 
 function AuthGate() {
@@ -27,6 +28,9 @@ function AuthGate() {
   // dance, no perpetually-one-version-behind state.
   useEffect(() => {
     checkAndApplyUpdate();
+    // Boot RevenueCat once on app mount. Idempotent — auth.loadMe
+    // calls iap.identify(user_id) once we know who's signed in.
+    iap.boot().catch(() => {});
     const sub = AppState.addEventListener("change", (s) => {
       if (s === "active") checkAndApplyUpdate();
     });

@@ -4,19 +4,21 @@
 // when a Pro user qualifies for the Pro Max upsell, or when the user
 // explicitly taps "Upgrade".
 //
-// Two product lines:
-//   • Pro      $14.99/mo  or  $89.99/yr  ← standard subscriber
-//   • Pro Max  $29.99/mo  or  $199.99/yr ← whale tier, near-unlimited
+// Two product lines, each with weekly + yearly billing:
+//   • Pro      — pro_weekly        / pro_yearly
+//   • Pro Max  — pro_max_weekly    / pro_max_yearly
 //
-// Yearly is highlighted as the default selection because it has by far
-// the best LTV (lower churn, fewer billing-cycle cancel decisions).
+// Yearly options anchor as the "smart deal." Pro Max weekly is the
+// default selected card (highest revenue, most popular per industry).
 //
-// IAP wiring will go through RevenueCat — for now this is the visual
-// scaffold that fires `onSubscribe(planId)` so we can swap in
-// `Purchases.purchasePackage(...)` later without touching the UI.
+// Purchase flow: when the user taps the CTA, we fetch the matching
+// RevenueCat package from the current Offering and trigger the native
+// Play purchase sheet. On success the backend webhook updates
+// users.plan and we refresh /me so the UI flips to subscribed state.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Alert,
   Animated,
   Dimensions,
   Easing,
@@ -26,8 +28,11 @@ import {
   Text,
   View,
 } from "react-native";
+import type { PurchasesOffering, PurchasesPackage } from "react-native-purchases";
 import { Pressable, PrimaryButton, TextLink } from "./ui";
 import { theme } from "../lib/theme";
+import * as iap from "../lib/iap";
+import { useAuth } from "../lib/auth";
 
 export type PlanId =
   | "pro_weekly"
@@ -117,10 +122,93 @@ export function PaywallSheet({
   cta = "Start 7-day free trial",
   upsellMode = false,
 }: Props) {
+  const { refreshMe } = useAuth();
   const defaultPlan: PlanId = upsellMode ? "pro_max_yearly" : "pro_max_weekly";
   const [selected, setSelected] = useState<PlanId>(defaultPlan);
+  const [offering, setOffering] = useState<PurchasesOffering | null>(null);
+  const [purchasing, setPurchasing] = useState(false);
   const translate = useRef(new Animated.Value(Dimensions.get("window").height)).current;
   const scrim = useRef(new Animated.Value(0)).current;
+
+  // Fetch RevenueCat offerings once when the sheet first becomes
+  // visible. We stash the whole Offering and resolve the matching
+  // package on subscribe by product identifier (pro_weekly,
+  // pro_max_yearly, etc.).
+  useEffect(() => {
+    if (!visible) return;
+    let cancelled = false;
+    iap
+      .fetchOfferings()
+      .then((o) => {
+        if (!cancelled) setOffering(o);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [visible]);
+
+  // Look up the RC package for whatever PlanId is currently selected.
+  // We match on the Play product identifier (the Plan.id is the
+  // product ID we created in Play Console).
+  const selectedPackage = useMemo<PurchasesPackage | null>(() => {
+    if (!offering) return null;
+    return (
+      offering.availablePackages.find(
+        (p) => p.product.identifier === selected,
+      ) ?? null
+    );
+  }, [offering, selected]);
+
+  const handleSubscribe = async () => {
+    if (purchasing) return;
+    if (!selectedPackage) {
+      Alert.alert(
+        "Subscription unavailable",
+        "Couldn't load subscription options. Check your connection and try again, or restart the app.",
+      );
+      return;
+    }
+    setPurchasing(true);
+    const outcome = await iap.purchasePackage(selectedPackage);
+    setPurchasing(false);
+    if (outcome.ok) {
+      // Refresh /me so the UI flips to the new plan immediately.
+      // Server-side, RC's webhook has already (or is about to) set
+      // users.plan = 'pro' | 'pro_max'.
+      try {
+        await refreshMe();
+      } catch {
+        // Non-fatal — even if /me refresh fails, the next call will
+        // pick up the new plan.
+      }
+      onSubscribe?.(selected);
+      onDismiss();
+    } else if ("cancelled" in outcome && outcome.cancelled) {
+      // User backed out of the Play sheet. Stay on the paywall, no toast.
+      return;
+    } else {
+      Alert.alert(
+        "Purchase failed",
+        outcome.error || "Something went wrong. No charges were made.",
+      );
+    }
+  };
+
+  const handleRestore = async () => {
+    const info = await iap.restorePurchases();
+    if (info && Object.keys(info.entitlements.active).length > 0) {
+      try {
+        await refreshMe();
+      } catch {
+        /* ignore */
+      }
+      Alert.alert("Restored", "Your subscription has been restored.");
+      onDismiss();
+    } else {
+      Alert.alert("Nothing to restore", "No active subscription found for this account.");
+    }
+  };
 
   useEffect(() => {
     if (visible) setSelected(defaultPlan);
@@ -314,8 +402,9 @@ export function PaywallSheet({
           </Text>
 
           <PrimaryButton
-            label={cta}
-            onPress={() => onSubscribe?.(selected) ?? onDismiss()}
+            label={purchasing ? "Processing…" : cta}
+            onPress={handleSubscribe}
+            disabled={purchasing || !selectedPackage}
           />
 
           <View
@@ -325,7 +414,7 @@ export function PaywallSheet({
               gap: theme.spacing.lg,
             }}
           >
-            <TextLink label="Restore" onPress={() => {}} size={theme.fontSizes.sm} />
+            <TextLink label="Restore" onPress={handleRestore} size={theme.fontSizes.sm} />
             <TextLink
               label="Privacy"
               onPress={() =>
