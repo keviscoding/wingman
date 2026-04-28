@@ -83,15 +83,20 @@ def rotate_api_key():
 # ---------------------------------------------------------------------------
 # Model IDs
 # ---------------------------------------------------------------------------
-LIVE_MODEL = "models/gemini-3.1-flash-live-preview"
-PRO_MODEL = "models/gemini-3.1-pro-preview"
-FLASH_MODEL = "models/gemini-3-flash-preview"
-# Flash Lite — used for the chat-match adjudicator. Smaller / faster than
-# full Flash; good enough for "same person or different" classification.
-# Override with WINGMAN_FLASH_LITE_MODEL if the preview slug changes.
+#
+# Bare names (no "models/" prefix) — required for Vertex AI mode and
+# also accepted by AI Studio's unified google-genai SDK. Earlier we
+# used "models/<name>" but Vertex returns 404 for that format.
+#
+# All three are env-overridable so we can swap to stable releases
+# (post-preview) or to a different snapshot without redeploying code.
+PRO_MODEL = os.getenv("WINGMAN_PRO_MODEL", "gemini-3.1-pro-preview")
+FLASH_MODEL = os.getenv("WINGMAN_FLASH_MODEL", "gemini-3-flash-preview")
 FLASH_LITE_MODEL = os.getenv(
-    "WINGMAN_FLASH_LITE_MODEL",
-    "models/gemini-3.1-flash-lite-preview",
+    "WINGMAN_FLASH_LITE_MODEL", "gemini-3.1-flash-lite-preview"
+)
+LIVE_MODEL = os.getenv(
+    "WINGMAN_LIVE_MODEL", "gemini-3.1-flash-live-preview"
 )
 
 
