@@ -7,20 +7,76 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 _ALL_KEYS = [k.strip() for k in os.getenv("GEMINI_API_KEYS", GEMINI_API_KEY).split(",") if k.strip()]
 _key_index = 0
 
+# ---- Vertex AI mode --------------------------------------------------
+# When WINGMAN_USE_VERTEX=1 (and ADC are available), every genai.Client
+# is created in Vertex mode. This switches the SDK from AI Studio's
+# consumer-grade rate limits to GCP project quotas — orders of
+# magnitude more headroom and no random "tier 2 → tier 1" demotions.
+#
+# Required env on the server:
+#   WINGMAN_USE_VERTEX=1
+#   GOOGLE_CLOUD_PROJECT=<your-gcp-project-id>     (e.g. "muzo-play")
+#   WINGMAN_VERTEX_LOCATION=us-central1            (default if unset)
+#   GOOGLE_APPLICATION_CREDENTIALS_JSON=<full SA JSON>
+#       — already used by the tuned Flash client; saas_app.py
+#         materializes it to /tmp/gcp-creds.json on boot
+#
+# The service account must have role roles/aiplatform.user on the
+# project. If creds are missing or the API isn't enabled the SDK will
+# error on first call and we transparently fall back to AI Studio
+# keys (we never want a config slip to take generation entirely down).
+
+USE_VERTEX = os.getenv("WINGMAN_USE_VERTEX", "").strip() in ("1", "true", "yes")
+VERTEX_PROJECT = (os.getenv("GOOGLE_CLOUD_PROJECT") or "").strip()
+VERTEX_LOCATION = (os.getenv("WINGMAN_VERTEX_LOCATION") or "us-central1").strip()
+
 
 def make_genai_client() -> "genai.Client":
-    """Create a genai.Client, rotating through available API keys."""
+    """Create a genai.Client.
+
+    Prefers Vertex AI when ``WINGMAN_USE_VERTEX=1`` and we have a
+    project id configured — this gives us GCP-tier quotas instead of
+    AI Studio's consumer rate limits.
+
+    Falls back to AI Studio key rotation if Vertex isn't configured
+    or its first call errors out (defensive — we never want a misset
+    env var to fully take generation down).
+    """
     global _key_index
     from google import genai as _genai
+
+    if USE_VERTEX and VERTEX_PROJECT:
+        try:
+            return _genai.Client(
+                vertexai=True,
+                project=VERTEX_PROJECT,
+                location=VERTEX_LOCATION,
+            )
+        except Exception as exc:  # pragma: no cover — diagnostic only
+            print(f"[config] Vertex client init failed, falling back to AI Studio: {exc}")
+
     if not _ALL_KEYS:
-        raise RuntimeError("GEMINI_API_KEY not set — add it to .env")
+        raise RuntimeError(
+            "Neither Vertex AI nor AI Studio keys configured. "
+            "Set WINGMAN_USE_VERTEX=1 + GOOGLE_CLOUD_PROJECT, "
+            "or set GEMINI_API_KEYS (comma-separated)."
+        )
     key = _ALL_KEYS[_key_index % len(_ALL_KEYS)]
     return _genai.Client(api_key=key)
 
 
 def rotate_api_key():
-    """Switch to the next API key after a rate limit error."""
+    """Switch to the next API key after a rate limit error.
+
+    No-op in Vertex mode — Vertex doesn't use API keys, so there's
+    nothing to rotate. Kept callable so existing call sites don't
+    have to branch on USE_VERTEX.
+    """
     global _key_index
+    if USE_VERTEX and VERTEX_PROJECT:
+        return
+    if not _ALL_KEYS:
+        return
     _key_index = (_key_index + 1) % len(_ALL_KEYS)
     print(f"[config] Rotated to API key {_key_index + 1}/{len(_ALL_KEYS)}")
 
