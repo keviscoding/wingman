@@ -27,24 +27,89 @@ def _bootstrap_gcp_credentials() -> None:
 
     DO App Platform doesn't give us a way to upload files, so we ship
     the JSON as an env var (`GOOGLE_APPLICATION_CREDENTIALS_JSON`) and
-    re-hydrate it here on every container boot. Vertex AI auth (used by
-    the tuned Flash client) reads from `GOOGLE_APPLICATION_CREDENTIALS`,
-    which is what we set after writing the file.
+    re-hydrate it here on every container boot. Vertex AI auth reads
+    from `GOOGLE_APPLICATION_CREDENTIALS`, which is what we set after
+    writing the file.
 
-    Skipped silently if the env var isn't set — Pro mode (public Gemini
-    API key) keeps working either way.
+    Robustness layers (DO mangles multi-line env values in subtle ways
+    depending on how they're pasted, so we try each format until we
+    get something parseable):
+
+      1. Direct JSON — the happy path
+      2. Escaped JSON — value contains literal "\\n" / "\\\"" pairs;
+         we un-escape and try again
+      3. Base64 — operator can paste base64(json) instead which is
+         escape-proof; we detect by JSON-parse failing then
+         attempting base64 decode
+
+    If all three fail we log a redacted preview so the operator can
+    diagnose without leaking the SA private key.
+
+    Skipped silently if the env var isn't set — AI Studio key path
+    keeps working either way.
     """
+    import base64 as _b64
+    import json as _json
+
     raw = (os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON") or "").strip()
     if not raw:
         return
+
+    def _try_parse(s: str) -> dict | None:
+        try:
+            return _json.loads(s)
+        except Exception:
+            return None
+
+    parsed = _try_parse(raw)
+    fmt = "direct"
+
+    # Layer 2: env value contains escaped newlines / quotes (DO does
+    # this with multi-line paste sometimes).
+    if parsed is None:
+        unescaped = raw.encode("utf-8").decode("unicode_escape")
+        parsed = _try_parse(unescaped)
+        if parsed is not None:
+            raw = unescaped
+            fmt = "unescaped"
+
+    # Layer 3: operator pasted base64 instead. Recommended path for DO.
+    if parsed is None:
+        try:
+            decoded = _b64.b64decode(raw, validate=False).decode("utf-8")
+            parsed = _try_parse(decoded)
+            if parsed is not None:
+                raw = decoded
+                fmt = "base64"
+        except Exception:
+            pass
+
+    if parsed is None:
+        # All three formats failed. Log a redacted preview to help
+        # the operator diagnose without leaking the private key.
+        preview = raw[:120].replace("\n", "\\n")
+        print(
+            f"[saas] GOOGLE_APPLICATION_CREDENTIALS_JSON could not be parsed "
+            f"as direct JSON, escaped JSON, or base64. "
+            f"length={len(raw)} preview={preview!r}"
+        )
+        return
+
+    # Sanity-check the parsed payload looks like a service account.
+    sa_email = parsed.get("client_email") or "<missing>"
+    sa_project = parsed.get("project_id") or "<missing>"
+
     target = "/tmp/gcp-creds.json"
     try:
         with open(target, "w", encoding="utf-8") as f:
-            f.write(raw)
+            _json.dump(parsed, f)
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = target
-        print(f"[saas] Wrote GCP credentials to {target}")
+        print(
+            f"[saas] Wrote GCP credentials to {target} "
+            f"(format={fmt}, sa={sa_email}, project={sa_project})"
+        )
     except Exception as exc:
-        print(f"[saas] Failed to write GCP creds: {exc}")
+        print(f"[saas] Failed to write GCP creds to disk: {exc}")
 
 
 def _seed_persistent_account() -> None:
