@@ -51,6 +51,8 @@ export default function SignupScreen() {
 
 function prettyError(detail: string): string {
   if (detail === "email_already_registered") return "That email is already registered.";
+  if (detail === "signup_rate_limited")
+    return "Too many signups from this network. Try again in a few hours.";
   if (detail.startsWith("network:")) return "Can't reach the server. Check your connection.";
   return detail;
 }

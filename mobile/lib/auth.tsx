@@ -6,6 +6,7 @@ import React, { createContext, useContext, useEffect, useState, useCallback, use
 import { api, AuthResponse, Me } from "./api";
 import { openPaywall } from "./paywallStore";
 import * as iap from "./iap";
+import { getDeviceId } from "./deviceId";
 import { clearSentryUser, identifySentryUser } from "./sentry";
 
 type AuthState = {
@@ -85,7 +86,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signUp = useCallback(
     async (email: string, password: string, displayName?: string) => {
-      const r: AuthResponse = await api.signup(email, password, displayName);
+      // Capture a stable device fingerprint so the server can deny
+      // free trial credits to secondary accounts created from a
+      // device that's already burned a previous account's trial. The
+      // value is null on simulators or in rare expo-application
+      // failures — the server tolerates that and just falls back to
+      // the standard "fresh trial" path for that signup.
+      const deviceId = await getDeviceId();
+      const r: AuthResponse = await api.signup(
+        email,
+        password,
+        displayName,
+        deviceId,
+      );
       setToken(r.token);
       await persist(r.token);
       await loadMe(r.token);

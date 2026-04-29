@@ -128,10 +128,16 @@ export const api = {
     email: string,
     password: string,
     display_name?: string,
+    device_id?: string | null,
   ): Promise<AuthResponse> {
     return request<AuthResponse>("/api/v1/auth/signup", {
       method: "POST",
-      body: JSON.stringify({ email, password, display_name }),
+      body: JSON.stringify({
+        email,
+        password,
+        display_name,
+        device_id: device_id || undefined,
+      }),
     });
   },
 

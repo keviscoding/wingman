@@ -205,8 +205,15 @@ CREATE TABLE IF NOT EXISTS users (
   daily_window_start   BIGINT NOT NULL DEFAULT 0,
   created_at           BIGINT NOT NULL,
   subscription_until   BIGINT,
-  push_token           TEXT
+  push_token           TEXT,
+  -- Device fingerprint captured at signup. Stable across reinstalls
+  -- (Android: Settings.Secure.ANDROID_ID, iOS: identifierForVendor).
+  -- Used to deny free-trial credits to secondary accounts created
+  -- from a device that has already burned a previous account's trial.
+  -- Null tolerated for legacy rows + clients that don't send it.
+  device_id            TEXT
 );
+CREATE INDEX IF NOT EXISTS users_device_idx ON users(device_id);
 
 CREATE TABLE IF NOT EXISTS sessions (
   jti           TEXT PRIMARY KEY,
@@ -275,6 +282,15 @@ def init_db() -> None:
         _backfill_column(conn, "users", "pro_lifetime_used", "BIGINT NOT NULL DEFAULT 0")
         _backfill_column(conn, "users", "pro_daily_count", "BIGINT NOT NULL DEFAULT 0")
         _backfill_column(conn, "users", "push_token", "TEXT")
+        _backfill_column(conn, "users", "device_id", "TEXT")
+        # Index on device_id for fast lookup of prior accounts on
+        # the same device. IF NOT EXISTS so it's safe to re-run.
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS users_device_idx ON users(device_id)")
+        except Exception:
+            # SQLite older versions might not support IF NOT EXISTS on
+            # index creation in all paths; tolerate failure.
+            pass
 
 
 def _backfill_column(conn: _Connection, table: str, col: str, type_decl: str) -> None:
@@ -322,18 +338,86 @@ def get_user_by_id(user_id: str) -> dict | None:
         return dict(row) if row else None
 
 
-def create_user(email: str, password_hash: str,
-                display_name: str | None = None) -> dict:
+def create_user(
+    email: str,
+    password_hash: str,
+    display_name: str | None = None,
+    device_id: str | None = None,
+) -> dict:
+    """Create a new account.
+
+    If ``device_id`` is supplied AND any other user already exists with
+    the same device_id, the new account is provisioned WITHOUT free
+    trial credits — its quota counters start pre-exhausted so the user
+    must subscribe to use Pro / can only use the daily Quick allowance.
+
+    This is the device-fingerprint check that stops freeloaders from
+    cycling through email accounts to keep harvesting the lifetime
+    trial. The previous account on the device gets its full trial; only
+    the second / third / fourth get gated.
+    """
     user_id = new_user_id()
     now = int(time.time())
+    device_id_clean = (device_id or "").strip() or None
+
+    # Pre-flight: has this device already produced an account?
+    pre_exhaust = False
+    if device_id_clean:
+        with connect() as conn:
+            prior = conn.execute(
+                "SELECT id FROM users WHERE device_id = ? LIMIT 1",
+                (device_id_clean,),
+            ).fetchone()
+        pre_exhaust = bool(prior)
+
+    # Either the standard "fresh trial" insert, or the gated "no
+    # trial — must subscribe" insert depending on pre_exhaust.
+    if pre_exhaust:
+        # Cap their counters at the trial threshold so can_generate()
+        # returns False until they upgrade. They can still use the
+        # daily Quick allowance (2/day for free) once the trial-spent
+        # threshold doesn't matter — that's by design, since the daily
+        # cap already protects margins.
+        # Caps live further down in this module; reference via globals
+        # so the values stay in one place.
+        cap_quick = globals().get("FREE_LIFETIME_TRIAL", 10)
+        cap_pro = globals().get("FREE_PRO_LIFETIME_TRIAL", 3)
+        with connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO users
+                    (id, email, password_hash, display_name, plan,
+                     lifetime_gens_used, pro_lifetime_used,
+                     created_at, device_id)
+                VALUES (?, ?, ?, ?, 'free', ?, ?, ?, ?)
+                """,
+                (
+                    user_id,
+                    email.strip().lower(),
+                    password_hash,
+                    display_name,
+                    cap_quick,
+                    cap_pro,
+                    now,
+                    device_id_clean,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM users WHERE id = ?", (user_id,)
+            ).fetchone()
+            print(f"[signup] device {device_id_clean[:12]}… already seen; new user {user_id} starts with trial=0")
+        return dict(row)
+
     with connect() as conn:
         conn.execute(
             """
             INSERT INTO users
-                (id, email, password_hash, display_name, plan, created_at)
-            VALUES (?, ?, ?, ?, 'free', ?)
+                (id, email, password_hash, display_name, plan,
+                 created_at, device_id)
+            VALUES (?, ?, ?, ?, 'free', ?, ?)
             """,
-            (user_id, email.strip().lower(), password_hash, display_name, now),
+            (user_id, email.strip().lower(), password_hash,
+             display_name, now, device_id_clean),
         )
         row = conn.execute(
             "SELECT * FROM users WHERE id = ?", (user_id,)

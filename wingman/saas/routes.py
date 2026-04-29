@@ -33,7 +33,7 @@ import io
 import time
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, Field
 
@@ -42,6 +42,42 @@ from .user_context import UserContext, get_context
 
 
 router = APIRouter(prefix="/api/v1")
+
+
+# ---------------------------------------------------------------------------
+# Signup IP rate limiter (anti-bot)
+# ---------------------------------------------------------------------------
+# Cheap defense against scripted account creation. A real human will
+# never hit this — they'd have to try to sign up 6 times in 24h from
+# the same IP, which is wildly atypical. Bots that spam signups WILL.
+#
+# Combined with the device_id check in db.create_user this stops 99%
+# of organic abuse without showing CAPTCHAs to anyone legitimate.
+_SIGNUP_PER_IP_LIMIT: int = 5
+_SIGNUP_PER_IP_WINDOW_S: int = 24 * 60 * 60
+_SIGNUP_IP_LOG: dict[str, list[float]] = {}
+
+
+def _client_ip(req: Request) -> str:
+    # DigitalOcean App Platform sits behind a proxy; X-Forwarded-For
+    # is the canonical real IP. Fall back to direct client if missing.
+    fwd = req.headers.get("x-forwarded-for", "").strip()
+    if fwd:
+        # First entry is the original client; rest are intermediate
+        # proxies that we don't care about.
+        return fwd.split(",")[0].strip()
+    return (req.client.host if req.client else "?") or "?"
+
+
+def _enforce_signup_ratelimit(req: Request) -> None:
+    ip = _client_ip(req)
+    now = time.time()
+    cutoff = now - _SIGNUP_PER_IP_WINDOW_S
+    log = _SIGNUP_IP_LOG.setdefault(ip, [])
+    log[:] = [t for t in log if t > cutoff]
+    if len(log) >= _SIGNUP_PER_IP_LIMIT:
+        raise HTTPException(status_code=429, detail="signup_rate_limited")
+    log.append(now)
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +119,10 @@ class SignupRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
     display_name: str | None = Field(default=None, max_length=80)
+    # Stable device fingerprint (Android SSAID / iOS idForVendor).
+    # Optional for backwards compatibility with older clients; missing
+    # value just disables the device-trial-gate check on this signup.
+    device_id: str | None = Field(default=None, max_length=128)
 
 
 class AuthResponse(BaseModel):
@@ -99,11 +139,15 @@ class LoginRequest(BaseModel):
 
 
 @router.post("/auth/signup", response_model=AuthResponse)
-async def signup(body: SignupRequest):
+async def signup(body: SignupRequest, req: Request):
+    _enforce_signup_ratelimit(req)
     if db.get_user_by_email(body.email):
         raise HTTPException(status_code=409, detail="email_already_registered")
     pw_hash = auth.hash_password(body.password)
-    user = db.create_user(body.email, pw_hash, body.display_name)
+    user = db.create_user(
+        body.email, pw_hash, body.display_name,
+        device_id=body.device_id,
+    )
     token, exp = auth.issue_token(user["id"])
     return AuthResponse(
         token=token, expires_at=exp,
