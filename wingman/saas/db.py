@@ -213,7 +213,11 @@ CREATE TABLE IF NOT EXISTS users (
   -- Null tolerated for legacy rows + clients that don't send it.
   device_id            TEXT
 );
-CREATE INDEX IF NOT EXISTS users_device_idx ON users(device_id);
+-- NB: index on device_id is created in init_db() after the backfill
+-- step adds the column on existing deployments. Putting it here
+-- inside the executescript would break production redeploys whose
+-- users table predates the device_id column (CREATE TABLE IF NOT
+-- EXISTS no-ops, then CREATE INDEX fails on missing column).
 
 CREATE TABLE IF NOT EXISTS sessions (
   jti           TEXT PRIMARY KEY,
