@@ -631,6 +631,15 @@ UPSELL_PROMPT_PRO_DAILY = 25     # 25 of 30 Pro generations used today
 
 def _plan_caps(plan: str) -> dict:
     """Return the per-day caps applicable to a plan tier."""
+    if plan == "admin":
+        # Comp / dev account. Effectively no daily caps — used for the
+        # owner account and for any beta tester we hand a comp to.
+        # Practical infinity rather than no-check so the existing
+        # quota math doesn't have to special-case "no cap".
+        return {
+            "quick_daily": 1_000_000,
+            "pro_daily": 1_000_000,
+        }
     if plan == "pro_max":
         return {
             "quick_daily": PRO_MAX_DAILY_QUICK,
@@ -667,6 +676,11 @@ def can_generate(user_id: str, mode: str = "fast") -> tuple[bool, str]:
         return False, "user_not_found"
 
     plan = q["plan"]
+    # Admin plan: never gated, regardless of subscription state.
+    # Used for the owner / comp accounts. Returns immediately so we
+    # don't even bump the daily counter check.
+    if plan == "admin":
+        return True, ""
     is_paid = q["is_subscribed"] and plan in ("pro", "pro_max")
     caps = _plan_caps(plan if is_paid else "free")
 

@@ -634,7 +634,7 @@ async def reply_copied(
 class AdminUpgradeRequest(BaseModel):
     email: EmailStr
     days: int = 365
-    plan: str = "pro"  # "pro" or "pro_max"
+    plan: str = "pro"  # "pro" | "pro_max" | "admin" (admin = uncapped)
 
 
 def _admin_token(authorization: Annotated[str | None, Header()] = None) -> str | None:
@@ -673,7 +673,7 @@ async def admin_upgrade(
     user = db.get_user_by_email(body.email)
     if not user:
         raise HTTPException(status_code=404, detail="user_not_found")
-    plan = body.plan if body.plan in ("pro", "pro_max") else "pro"
+    plan = body.plan if body.plan in ("pro", "pro_max", "admin") else "pro"
     until = int(time.time()) + body.days * 24 * 3600
     with db.connect() as conn:
         conn.execute(

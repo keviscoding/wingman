@@ -36,7 +36,7 @@ export type ChatSummary = {
   last_copied_angle?: string | null;
 };
 
-export type PlanTier = "free" | "pro" | "pro_max";
+export type PlanTier = "free" | "pro" | "pro_max" | "admin";
 
 export type Me = {
   user_id: string;
