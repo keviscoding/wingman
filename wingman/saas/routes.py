@@ -144,6 +144,16 @@ async def signup(body: SignupRequest, req: Request):
     if db.get_user_by_email(body.email):
         raise HTTPException(status_code=409, detail="email_already_registered")
     pw_hash = auth.hash_password(body.password)
+
+    # Diagnostic log — lets us verify device fingerprinting actually
+    # works in production. The server log will show:
+    #   • "device_id=<id-prefix>…"  → mobile sent it, gate active
+    #   • "device_id=<none>"        → mobile didn't send it (old build
+    #                                  or simulator) → gate skipped
+    did = body.device_id
+    did_disp = (did[:12] + "…") if did else "<none>"
+    print(f"[signup] email={body.email} ip={_client_ip(req)} device_id={did_disp}")
+
     user = db.create_user(
         body.email, pw_hash, body.display_name,
         device_id=body.device_id,

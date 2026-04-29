@@ -362,13 +362,21 @@ def create_user(
 
     # Pre-flight: has this device already produced an account?
     pre_exhaust = False
+    prior_count = 0
     if device_id_clean:
         with connect() as conn:
-            prior = conn.execute(
-                "SELECT id FROM users WHERE device_id = ? LIMIT 1",
+            rows = conn.execute(
+                "SELECT id FROM users WHERE device_id = ?",
                 (device_id_clean,),
-            ).fetchone()
-        pre_exhaust = bool(prior)
+            ).fetchall()
+        prior_count = len(rows)
+        pre_exhaust = prior_count > 0
+    print(
+        f"[create_user] new={user_id} device_id="
+        f"{(device_id_clean[:12] + '…') if device_id_clean else '<none>'} "
+        f"prior_accounts_on_device={prior_count} "
+        f"pre_exhaust_trial={pre_exhaust}"
+    )
 
     # Either the standard "fresh trial" insert, or the gated "no
     # trial — must subscribe" insert depending on pre_exhaust.
