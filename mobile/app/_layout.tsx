@@ -14,7 +14,12 @@ import {
 } from "../lib/paywallStore";
 import { registerWithServer } from "../lib/pushNotify";
 import * as iap from "../lib/iap";
+import { bootSentry } from "../lib/sentry";
 import { theme } from "../lib/theme";
+
+// Boot Sentry as early as possible so module-load errors are captured.
+// No-ops if EXPO_PUBLIC_SENTRY_DSN isn't set.
+bootSentry();
 
 function AuthGate() {
   const { token, loading } = useAuth();

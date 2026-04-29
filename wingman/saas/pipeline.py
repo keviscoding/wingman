@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import uuid
 from pathlib import Path
@@ -20,6 +21,76 @@ from pathlib import Path
 from wingman.transcript import ConversationState, Message
 from . import db
 from .user_context import UserContext
+
+
+# ---------------------------------------------------------------------------
+# Brand / edge protection
+# ---------------------------------------------------------------------------
+# Anything the AI emits passes through _sanitize_for_user before it
+# leaves the server. The model is told via system prompt to never
+# reveal its provenance, but prompts can be coaxed — this is a
+# defense-in-depth scrubber that mechanically replaces leaks with
+# neutral Muzo branding so the moat (training data, model family,
+# internal codenames) never leaves our infra in plain text.
+#
+# Rules:
+#   • internal codenames (PWF and variants) → "Muzo"
+#   • underlying model family (Gemini / Google) → neutral language
+#   • training methodology terms ("fine-tuned on", "tuned model") → soft
+#   • the literal model identifier strings → "Muzo"
+#
+# Order matters: do the longer multi-word phrases first so the
+# single-word replacements don't damage them.
+_BRAND_SUBS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # Multi-word model references
+    (re.compile(r"\b(Google'?s?\s+(?:Gemini|gemini)(?:\s+(?:[\d.]+\s*)?(?:Pro|Flash|Lite|Preview|Advanced))*)\b"), "Muzo"),
+    (re.compile(r"\bGemini\s+(?:[\d.]+\s*)?(?:Pro|Flash|Lite|Preview|Advanced)\b", re.IGNORECASE), "Muzo"),
+    (re.compile(r"\bgemini-[\w.-]+\b", re.IGNORECASE), "Muzo"),
+    (re.compile(r"\bGoogle'?s?\s+(?:large language model|LLM|AI|model)\b", re.IGNORECASE), "Muzo"),
+    # Training/methodology terms (soften but don't expose technique)
+    (re.compile(r"\b(?:fine[- ]tuned\s+on|fine[- ]tuning|finetuned\s+on)\b", re.IGNORECASE), "trained for"),
+    (re.compile(r"\btraining\s+(?:dataset|corpus|data)\b", re.IGNORECASE), "training material"),
+    # Internal codenames — PWF is "Playing With Fire", the source-text
+    # name we never want to surface in user-facing output.
+    (re.compile(r"\bPWF\b"), "Muzo"),
+    (re.compile(r"\bPlaying[- ]?With[- ]?Fire\b", re.IGNORECASE), "Muzo"),
+    # Bare model name (after the qualified phrases above so we don't
+    # double-replace things like "Gemini 3.1 Pro")
+    (re.compile(r"\bGemini\b"), "Muzo"),
+    # If the model says "as an AI made by Google" / similar
+    (re.compile(r"\b(?:made|built|created|developed)\s+by\s+Google\b", re.IGNORECASE), "made by Muzo"),
+    (re.compile(r"\bI'?m\s+(?:an?\s+)?(?:Google\s+)?(?:AI|language\s+model|LLM)\b", re.IGNORECASE), "I'm Muzo"),
+)
+
+
+def _sanitize_for_user(text: str | None) -> str:
+    """Scrub model/training disclosures from any AI-generated text
+    before it leaves the server. Idempotent — safe to run multiple
+    times. Whitespace and punctuation are preserved."""
+    if not text:
+        return text or ""
+    out = text
+    for pat, sub in _BRAND_SUBS:
+        out = pat.sub(sub, out)
+    return out
+
+
+def _sanitize_replies(replies: list[dict] | None) -> list[dict]:
+    """Apply _sanitize_for_user to every text-bearing field on each
+    reply object. Leaves angles/labels alone — those are never
+    sensitive."""
+    if not replies:
+        return []
+    out: list[dict] = []
+    for r in replies:
+        if not isinstance(r, dict):
+            continue
+        cleaned = dict(r)
+        for k in ("text", "reasoning", "why", "explanation"):
+            if isinstance(cleaned.get(k), str):
+                cleaned[k] = _sanitize_for_user(cleaned[k])
+        out.append(cleaned)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -204,13 +275,16 @@ def get_chat_for_user(ctx: UserContext, chat_id: str) -> dict | None:
     if not chat or not chat["messages"]:
         return None
     meta = chat["meta"]
+    # Scrub on read too — covers chats persisted before the sanitizer
+    # was added. New writes are already pre-scrubbed at the source so
+    # this is mostly a no-op going forward.
     return {
         "id": chat_id,
         "contact": chat["contact"],
         "messages": chat["messages"],
-        "replies": meta.get("last_replies", []),
-        "read": meta.get("last_read", ""),
-        "advice": meta.get("last_advice", ""),
+        "replies": _sanitize_replies(meta.get("last_replies", [])),
+        "read": _sanitize_for_user(meta.get("last_read", "")),
+        "advice": _sanitize_for_user(meta.get("last_advice", "")),
         "locked_context": meta.get("locked_context", ""),
         "locked_context_enabled": bool(meta.get("locked_context_enabled")),
     }
@@ -279,7 +353,14 @@ async def quick_capture_for_user(
             ctx, conv.messages, extra_context=merged_context,
         )
 
-    # Step 4: persist replies on the chat meta
+    # Step 4: scrub any model/training disclosures BEFORE persisting
+    # so the cached versions are also clean — protects us if we ever
+    # change the sanitizer rules later (the historical reads will
+    # already be sanitized at storage time).
+    replies = _sanitize_replies(replies)
+    read = _sanitize_for_user(read)
+    advice = _sanitize_for_user(advice)
+
     existing_meta["last_replies"] = replies
     existing_meta["last_read"] = read
     existing_meta["last_advice"] = advice
@@ -296,7 +377,7 @@ async def quick_capture_for_user(
         "replies": replies,
         "read": read,
         "advice": advice,
-        "model": model_tag,
+        "model": "muzo",  # never leak which underlying model handled this call
         "cost_cents": cost,
     }
 
@@ -322,6 +403,10 @@ async def regenerate_for_user(
         replies, read, advice, model_tag, cost = await _generate_for_user_messages(
             ctx, conv.messages, extra_context=merged_context,
         )
+    # Scrub before persisting + returning — see notes in quick_capture.
+    replies = _sanitize_replies(replies)
+    read = _sanitize_for_user(read)
+    advice = _sanitize_for_user(advice)
     meta = chat["meta"]
     meta["last_replies"] = replies
     meta["last_read"] = read
@@ -334,7 +419,7 @@ async def regenerate_for_user(
         "replies": replies,
         "read": read,
         "advice": advice,
-        "model": model_tag,
+        "model": "muzo",
         "cost_cents": cost,
     }
 

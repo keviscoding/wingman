@@ -1,20 +1,23 @@
 // Paywall — modal sheet that slides up from the bottom.
 //
-// Shown when a generation request returns 402 (free trial / daily cap),
-// when a Pro user qualifies for the Pro Max upsell, or when the user
-// explicitly taps "Upgrade".
+// UX shape (as of v0.2):
+//   • Header copy + close
+//   • Tier toggle:  [ Pro ] [ Pro Max ]   ← Pro Max default (highest LTV)
+//   • Bullet list for the selected tier
+//   • Billing toggle: [ Weekly ] [ Yearly ]   ← Yearly default (anchors value)
+//   • One focused price card (price + savings tag)
+//   • Subscribe CTA — shows "Subscribe — $89.99/yr" when offering loaded
+//   • Restore · Privacy · Terms
 //
-// Two product lines, each with weekly + yearly billing:
-//   • Pro      — pro_weekly        / pro_yearly
-//   • Pro Max  — pro_max_weekly    / pro_max_yearly
-//
-// Yearly options anchor as the "smart deal." Pro Max weekly is the
-// default selected card (highest revenue, most popular per industry).
-//
-// Purchase flow: when the user taps the CTA, we fetch the matching
-// RevenueCat package from the current Offering and trigger the native
-// Play purchase sheet. On success the backend webhook updates
-// users.plan and we refresh /me so the UI flips to subscribed state.
+// Why this shape:
+//   - 4 flat cards confuse users; segmenting the choice into two
+//     binary decisions (tier, then period) reduces cognitive load
+//     and lifts conversion.
+//   - Pro Max + Yearly is the highest-revenue combo, so it's the
+//     default selection.
+//   - When RC's offering is null (sideloaded build, Play Billing not
+//     wired up, or sync delay), we surface a real error instead of
+//     a silently-disabled button.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -40,64 +43,34 @@ export type PlanId =
   | "pro_max_weekly"
   | "pro_max_yearly";
 
-type Plan = {
-  id: PlanId;
-  tier: "pro" | "pro_max";
-  title: string;
-  /** One-line tagline shown under the title (the hero copy). */
-  tagline: string;
-  /** 1-2 supporting lines under the tagline. Kept short — paywall
-   *  cards lose conversion when crammed with bullets. */
-  bullets: string[];
-  tag?: string;
-  highlight?: boolean;
-};
+type Tier = "pro" | "pro_max";
+type Period = "weekly" | "yearly";
 
-// Pricing intentionally NOT in the Plan objects. Apple/Google show
-// the localized price in the native purchase sheet, and we want
-// flexibility to A/B test prices without redeploying. The card
-// communicates VALUE; the store sheet communicates PRICE.
+function planIdFor(tier: Tier, period: Period): PlanId {
+  if (tier === "pro_max") return period === "yearly" ? "pro_max_yearly" : "pro_max_weekly";
+  return period === "yearly" ? "pro_yearly" : "pro_weekly";
+}
 
-const PLANS: Plan[] = [
-  {
-    id: "pro_weekly",
-    tier: "pro",
+const TIER_COPY: Record<Tier, { title: string; tagline: string; bullets: string[] }> = {
+  pro: {
     title: "Pro",
-    tagline: "Premium AI. For the replies that matter.",
+    tagline: "Premium AI for the replies that matter.",
     bullets: [
-      "The closer — use it when one reply changes the chat",
-      "20 Pro replies/day · billed weekly",
+      "20 Pro replies/day · the closer when one reply changes the chat",
+      "Unlimited Quick replies",
+      "Save chats, lock context, copy in one tap",
     ],
   },
-  {
-    id: "pro_yearly",
-    tier: "pro",
-    title: "Pro · Yearly",
-    tagline: "Same Pro. Half the price.",
-    bullets: ["Everything in Pro", "Save 50% vs weekly"],
-    tag: "SAVE 50%",
-  },
-  {
-    id: "pro_max_weekly",
-    tier: "pro_max",
+  pro_max: {
     title: "Pro Max",
     tagline: "For people who text more than they sleep.",
     bullets: [
-      "100 Pro replies/day · priority queue · early access",
-      "Billed weekly",
+      "100 Pro replies/day · 5× the volume",
+      "Priority queue · your replies skip the line",
+      "Early access to new features and models",
     ],
-    tag: "MOST POPULAR",
-    highlight: true,
   },
-  {
-    id: "pro_max_yearly",
-    tier: "pro_max",
-    title: "Pro Max · Yearly",
-    tagline: "All Pro Max. Almost half off.",
-    bullets: ["Everything in Pro Max", "Save ~45% vs weekly"],
-    tag: "BEST VALUE",
-  },
-];
+};
 
 type Props = {
   visible: boolean;
@@ -119,53 +92,185 @@ export function PaywallSheet({
   pretitle,
   title,
   subtitle,
-  cta = "Subscribe",
+  cta,
   upsellMode = false,
 }: Props) {
   const { refreshMe } = useAuth();
-  const defaultPlan: PlanId = upsellMode ? "pro_max_yearly" : "pro_max_weekly";
-  const [selected, setSelected] = useState<PlanId>(defaultPlan);
+  const [tier, setTier] = useState<Tier>("pro_max");
+  const [period, setPeriod] = useState<Period>("yearly");
   const [offering, setOffering] = useState<PurchasesOffering | null>(null);
+  const [offeringError, setOfferingError] = useState<string | null>(null);
+  const [loadingOfferings, setLoadingOfferings] = useState(false);
   const [purchasing, setPurchasing] = useState(false);
   const translate = useRef(new Animated.Value(Dimensions.get("window").height)).current;
   const scrim = useRef(new Animated.Value(0)).current;
 
-  // Fetch RevenueCat offerings once when the sheet first becomes
-  // visible. We stash the whole Offering and resolve the matching
-  // package on subscribe by product identifier (pro_weekly,
-  // pro_max_yearly, etc.).
+  const selectedPlanId = planIdFor(tier, period);
+
+  // Helper to (re)fetch the RC offering. Surfaces a structured error
+  // string so the UI can tell the user *why* prices aren't showing.
+  const loadOfferings = useMemo(
+    () => async () => {
+      setLoadingOfferings(true);
+      setOfferingError(null);
+      try {
+        const o = await iap.fetchOfferings();
+        if (!o) {
+          setOffering(null);
+          setOfferingError(
+            "Couldn't load store prices. Make sure you installed Muzo from the Play Store internal testing link and that you're added as a license tester.",
+          );
+        } else if (!o.availablePackages || o.availablePackages.length === 0) {
+          setOffering(null);
+          setOfferingError(
+            "No subscription plans configured. Try restarting the app — if this persists, contact support.",
+          );
+        } else {
+          setOffering(o);
+        }
+      } catch (e: any) {
+        setOffering(null);
+        setOfferingError(e?.message || "Couldn't reach the store.");
+      } finally {
+        setLoadingOfferings(false);
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     if (!visible) return;
     let cancelled = false;
-    iap
-      .fetchOfferings()
-      .then((o) => {
-        if (!cancelled) setOffering(o);
-      })
-      .catch(() => {});
+    void (async () => {
+      if (!cancelled) await loadOfferings();
+    })();
     return () => {
       cancelled = true;
     };
-  }, [visible]);
+  }, [visible, loadOfferings]);
 
-  // Look up the RC package for whatever PlanId is currently selected.
-  // We match on the Play product identifier (the Plan.id is the
-  // product ID we created in Play Console).
-  const selectedPackage = useMemo<PurchasesPackage | null>(() => {
+  // Reset to defaults whenever the sheet opens. Pro Max + Yearly is
+  // the default — except in upsellMode (Pro→Pro Max) where the user
+  // is already Pro, so we land on Pro Max + Yearly too.
+  useEffect(() => {
+    if (visible) {
+      setTier("pro_max");
+      setPeriod("yearly");
+    }
+  }, [visible, upsellMode]);
+
+  // Resolve the RC package for a given PlanId. We match through
+  // multiple strategies because RC + Play Billing v5+ can surface
+  // package/product identifiers in several formats:
+  //   - offering.weekly / offering.annual (predefined $rc_* slots)
+  //   - pkg.identifier === "pro_max_weekly" (Custom packages we
+  //     created in RC dashboard)
+  //   - pkg.product.identifier matches our PlanId
+  //   - pkg.product.identifier starts with our PlanId (Play subs
+  //     can return "pro_weekly:weekly" — productId:basePlanId)
+  // Order matters — predefined slots first since they're the most
+  // canonical mapping.
+  //
+  // Declared up here BEFORE the consumers (debugSummary,
+  // noMatchingPackages) because useMemo factories run synchronously
+  // during render — out-of-order declaration trips a TDZ
+  // ReferenceError that crashes the whole component.
+  const findPackage = useMemo(
+    () => (planId: PlanId): PurchasesPackage | null => {
+      if (!offering) return null;
+      const all = offering.availablePackages || [];
+      // Predefined slot accessors for $rc_weekly / $rc_annual
+      if (planId === "pro_weekly" && offering.weekly) return offering.weekly;
+      if (planId === "pro_yearly" && offering.annual) return offering.annual;
+      // Custom packages in RC: identifier matches PlanId directly
+      const byPkgId = all.find((p) => p.identifier === planId);
+      if (byPkgId) return byPkgId;
+      // Custom packages with `_annual` slug instead of `_yearly`
+      if (planId === "pro_max_yearly") {
+        const byAnnual = all.find((p) => p.identifier === "pro_max_annual");
+        if (byAnnual) return byAnnual;
+      }
+      // Match on product identifier (exact)
+      const byProduct = all.find((p) => p.product.identifier === planId);
+      if (byProduct) return byProduct;
+      // Match on product identifier with base plan suffix
+      // (e.g. "pro_weekly:weekly")
+      const byProductPrefix = all.find((p) =>
+        p.product.identifier.startsWith(`${planId}:`),
+      );
+      if (byProductPrefix) return byProductPrefix;
+      return null;
+    },
+    [offering],
+  );
+
+  // Build a human-readable summary of what RC returned so the user
+  // (or us, debugging on a real device) can see exactly which packages
+  // are available — useful when nothing renders prices but the
+  // offering loaded.
+  const debugSummary = useMemo(() => {
     if (!offering) return null;
-    return (
-      offering.availablePackages.find(
-        (p) => p.product.identifier === selected,
-      ) ?? null
-    );
-  }, [offering, selected]);
+    const lines: string[] = [];
+    lines.push(`offering=${offering.identifier}`);
+    lines.push(`pkgs=${offering.availablePackages.length}`);
+    for (const p of offering.availablePackages) {
+      lines.push(
+        `· ${p.identifier} → ${p.product.identifier} (${p.product.priceString || "no price"})`,
+      );
+    }
+    return lines.join("\n");
+  }, [offering]);
+
+  // Detect the trickier failure mode: offering loaded with packages
+  // but none match any of our 4 PlanIds. This usually means the RC
+  // dashboard package identifiers / linked products don't match what
+  // we expect. Surface debug info so we can fix the dashboard
+  // without redeploying.
+  const noMatchingPackages = useMemo(() => {
+    if (!offering) return false;
+    const ids: PlanId[] = [
+      "pro_weekly",
+      "pro_yearly",
+      "pro_max_weekly",
+      "pro_max_yearly",
+    ];
+    return !ids.some((id) => findPackage(id) !== null);
+  }, [offering, findPackage]);
+
+  const selectedPackage = useMemo<PurchasesPackage | null>(
+    () => findPackage(selectedPlanId),
+    [findPackage, selectedPlanId],
+  );
+
+  // Look up both billing periods for the active tier so we can show
+  // savings. weeklyPkg.price * 52 vs yearlyPkg.price gives the % off.
+  const weeklyPkg = useMemo(
+    () => findPackage(planIdFor(tier, "weekly")),
+    [findPackage, tier],
+  );
+  const yearlyPkg = useMemo(
+    () => findPackage(planIdFor(tier, "yearly")),
+    [findPackage, tier],
+  );
+
+  // Compute savings for the yearly card based on weekly price * 52.
+  const yearlySavingsPct = useMemo(() => {
+    const weekly = weeklyPkg?.product.price;
+    const yearly = yearlyPkg?.product.price;
+    if (!weekly || !yearly) return null;
+    const equivAnnual = weekly * 52;
+    if (equivAnnual <= 0) return null;
+    const pct = Math.round(((equivAnnual - yearly) / equivAnnual) * 100);
+    return pct > 0 ? pct : null;
+  }, [weeklyPkg, yearlyPkg]);
 
   const handleSubscribe = async () => {
     if (purchasing) return;
     if (!selectedPackage) {
       Alert.alert(
-        "Subscription unavailable",
-        "Couldn't load subscription options. Check your connection and try again, or restart the app.",
+        "Subscriptions unavailable",
+        offeringError ||
+          "Couldn't load subscription options. Check your connection and try again, or restart the app.",
       );
       return;
     }
@@ -173,19 +278,14 @@ export function PaywallSheet({
     const outcome = await iap.purchasePackage(selectedPackage);
     setPurchasing(false);
     if (outcome.ok) {
-      // Refresh /me so the UI flips to the new plan immediately.
-      // Server-side, RC's webhook has already (or is about to) set
-      // users.plan = 'pro' | 'pro_max'.
       try {
         await refreshMe();
       } catch {
-        // Non-fatal — even if /me refresh fails, the next call will
-        // pick up the new plan.
+        /* non-fatal */
       }
-      onSubscribe?.(selected);
+      onSubscribe?.(selectedPlanId);
       onDismiss();
     } else if ("cancelled" in outcome && outcome.cancelled) {
-      // User backed out of the Play sheet. Stay on the paywall, no toast.
       return;
     } else {
       Alert.alert(
@@ -209,10 +309,6 @@ export function PaywallSheet({
       Alert.alert("Nothing to restore", "No active subscription found for this account.");
     }
   };
-
-  useEffect(() => {
-    if (visible) setSelected(defaultPlan);
-  }, [visible, defaultPlan]);
 
   useEffect(() => {
     if (visible) {
@@ -255,7 +351,15 @@ export function PaywallSheet({
     subtitle ??
     (upsellMode
       ? "You've been hitting the Pro daily cap. Pro Max gives you 100 Pro replies a day, priority queue, and early features."
-      : "Pro unlocks unlimited Quick replies and the high-quality Pro mode.");
+      : "Pro and Pro Max unlock the high-quality AI mode and unlimited Quick replies.");
+
+  const tierCopy = TIER_COPY[tier];
+  const ctaPriceSuffix = selectedPackage?.product.priceString
+    ? ` — ${selectedPackage.product.priceString}${period === "yearly" ? "/yr" : "/wk"}`
+    : "";
+  const ctaLabel = purchasing
+    ? "Processing…"
+    : (cta ?? "Subscribe") + ctaPriceSuffix;
 
   return (
     <View
@@ -299,13 +403,7 @@ export function PaywallSheet({
         }}
       >
         {/* drag handle */}
-        <View
-          style={{
-            alignItems: "center",
-            paddingTop: 8,
-            paddingBottom: 4,
-          }}
-        >
+        <View style={{ alignItems: "center", paddingTop: 8, paddingBottom: 4 }}>
           <View
             style={{
               width: 40,
@@ -325,6 +423,7 @@ export function PaywallSheet({
           }}
           showsVerticalScrollIndicator={false}
         >
+          {/* Header */}
           <View
             style={{
               flexDirection: "row",
@@ -379,27 +478,149 @@ export function PaywallSheet({
             </Pressable>
           </View>
 
-          <View style={{ gap: 10 }}>
-            {PLANS.map((p) => {
-              // Look up the matching RC package so we can show the
-              // user the localized price right on the card. If the
-              // offering hasn't loaded yet (network slow / RC sync
-              // delay), the card just doesn't show a price — better
-              // than showing a wrong fallback.
-              const pkg = offering?.availablePackages.find(
-                (x) => x.product.identifier === p.id,
-              );
-              return (
-                <PlanCard
-                  key={p.id}
-                  plan={p}
-                  priceString={pkg?.product.priceString}
-                  selected={selected === p.id}
-                  onSelect={() => setSelected(p.id)}
-                />
-              );
-            })}
+          {/* Tier toggle */}
+          <SegmentedToggle
+            value={tier}
+            onChange={setTier}
+            options={[
+              { value: "pro", label: "Pro" },
+              { value: "pro_max", label: "Pro Max", badge: "POPULAR" },
+            ]}
+          />
+
+          {/* Bullets for the selected tier */}
+          <View style={{ gap: 8 }}>
+            <Text
+              style={{
+                color: theme.text,
+                fontSize: theme.fontSizes.lg,
+                fontWeight: theme.fontWeights.bold,
+              }}
+            >
+              {tierCopy.title}
+            </Text>
+            <Text
+              style={{
+                color: theme.dim,
+                fontSize: theme.fontSizes.md,
+                lineHeight: theme.fontSizes.md * theme.lineHeights.body,
+              }}
+            >
+              {tierCopy.tagline}
+            </Text>
+            <View style={{ gap: 6, marginTop: 6 }}>
+              {tierCopy.bullets.map((b, i) => (
+                <View key={i} style={{ flexDirection: "row", gap: 8 }}>
+                  <Text style={{ color: theme.accent, fontSize: 14 }}>✓</Text>
+                  <Text
+                    style={{
+                      flex: 1,
+                      color: theme.text,
+                      fontSize: theme.fontSizes.sm,
+                      lineHeight: theme.fontSizes.sm * theme.lineHeights.body,
+                    }}
+                  >
+                    {b}
+                  </Text>
+                </View>
+              ))}
+            </View>
           </View>
+
+          {/* Billing period — two side-by-side cards */}
+          <View style={{ gap: 8 }}>
+            <Text
+              style={{
+                color: theme.dim,
+                fontSize: 11,
+                fontWeight: theme.fontWeights.bold,
+                letterSpacing: theme.tracking.label,
+                textTransform: "uppercase",
+              }}
+            >
+              Choose your billing
+            </Text>
+            <View style={{ flexDirection: "row", gap: 10 }}>
+              <PeriodCard
+                label="Weekly"
+                priceString={weeklyPkg?.product.priceString}
+                periodSuffix="/wk"
+                selected={period === "weekly"}
+                onSelect={() => setPeriod("weekly")}
+              />
+              <PeriodCard
+                label="Yearly"
+                priceString={yearlyPkg?.product.priceString}
+                periodSuffix="/yr"
+                selected={period === "yearly"}
+                onSelect={() => setPeriod("yearly")}
+                tag={yearlySavingsPct ? `SAVE ${yearlySavingsPct}%` : "BEST VALUE"}
+              />
+            </View>
+          </View>
+
+          {/* Diagnostic banner — shown when:
+              1. RC didn't return an offering at all, OR
+              2. RC returned an offering but our PlanIds don't match
+                 any package's identifier/product (dashboard config bug). */}
+          {(offeringError && !offering) || noMatchingPackages ? (
+            <View
+              style={{
+                backgroundColor: theme.surface,
+                borderColor: theme.gold,
+                borderWidth: 1,
+                borderRadius: theme.radii.md,
+                padding: theme.spacing.md,
+                gap: 6,
+              }}
+            >
+              <Text
+                style={{
+                  color: theme.text,
+                  fontSize: theme.fontSizes.sm,
+                  fontWeight: theme.fontWeights.semibold,
+                }}
+              >
+                Can't load prices yet
+              </Text>
+              <Text
+                style={{
+                  color: theme.dim,
+                  fontSize: theme.fontSizes.sm,
+                  lineHeight: theme.fontSizes.sm * theme.lineHeights.body,
+                }}
+              >
+                {offeringError ??
+                  "Subscription plans loaded but none match the expected products. The RevenueCat dashboard needs a config fix — see details below."}
+              </Text>
+              {debugSummary ? (
+                <Text
+                  selectable
+                  style={{
+                    color: theme.dim,
+                    fontSize: 11,
+                    fontFamily: "Courier",
+                    lineHeight: 16,
+                    marginTop: 4,
+                  }}
+                >
+                  {debugSummary}
+                </Text>
+              ) : null}
+              <Pressable onPress={loadOfferings}>
+                <Text
+                  style={{
+                    color: theme.accent,
+                    fontSize: theme.fontSizes.sm,
+                    fontWeight: theme.fontWeights.semibold,
+                    marginTop: 4,
+                  }}
+                >
+                  {loadingOfferings ? "Retrying…" : "Tap to retry"}
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
 
           <Text
             style={{
@@ -413,7 +634,7 @@ export function PaywallSheet({
           </Text>
 
           <PrimaryButton
-            label={purchasing ? "Processing…" : cta}
+            label={ctaLabel}
             onPress={handleSubscribe}
             disabled={purchasing || !selectedPackage}
           />
@@ -447,49 +668,121 @@ export function PaywallSheet({
   );
 }
 
-function PlanCard({
-  plan,
+function SegmentedToggle<T extends string>({
+  value,
+  onChange,
+  options,
+}: {
+  value: T;
+  onChange: (next: T) => void;
+  options: { value: T; label: string; badge?: string }[];
+}) {
+  return (
+    <View
+      style={{
+        flexDirection: "row",
+        backgroundColor: theme.surface,
+        borderColor: theme.border,
+        borderWidth: 1,
+        borderRadius: theme.radii.pill,
+        padding: 4,
+      }}
+    >
+      {options.map((o) => {
+        const active = o.value === value;
+        return (
+          <Pressable
+            key={o.value}
+            onPress={() => onChange(o.value)}
+            style={{ flex: 1 }}
+          >
+            <View
+              style={{
+                paddingVertical: 10,
+                paddingHorizontal: 12,
+                borderRadius: theme.radii.pill,
+                backgroundColor: active ? theme.accent : "transparent",
+                alignItems: "center",
+                flexDirection: "row",
+                justifyContent: "center",
+                gap: 6,
+              }}
+            >
+              <Text
+                style={{
+                  color: active ? theme.bg : theme.text,
+                  fontSize: theme.fontSizes.md,
+                  fontWeight: theme.fontWeights.bold,
+                }}
+              >
+                {o.label}
+              </Text>
+              {o.badge ? (
+                <View
+                  style={{
+                    backgroundColor: active ? theme.bg : theme.accent,
+                    borderRadius: theme.radii.pill,
+                    paddingHorizontal: 6,
+                    paddingVertical: 2,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: active ? theme.accent : theme.bg,
+                      fontSize: 9,
+                      fontWeight: theme.fontWeights.bold,
+                      letterSpacing: theme.tracking.label,
+                    }}
+                  >
+                    {o.badge}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function PeriodCard({
+  label,
   priceString,
+  periodSuffix,
   selected,
   onSelect,
+  tag,
 }: {
-  plan: Plan;
-  /** Localized price string from the Play store (e.g. "$4.99",
-   *  "£3.99", "€4.99"). Optional — if the RC offering hasn't
-   *  loaded yet we just don't show a price. */
+  label: string;
   priceString?: string;
+  periodSuffix: string;
   selected: boolean;
   onSelect: () => void;
+  tag?: string;
 }) {
-  const isHighlight = !!plan.highlight;
-  // Period suffix shown next to the price ("/wk" or "/yr")
-  const periodSuffix = plan.id.endsWith("yearly") ? " / yr" : " / wk";
   return (
-    <Pressable onPress={onSelect}>
+    <Pressable onPress={onSelect} style={{ flex: 1 }}>
       <View
         style={{
           position: "relative",
-          backgroundColor: isHighlight ? theme.accentDim : theme.surface,
+          backgroundColor: selected ? theme.accentDim : theme.surface,
+          borderColor: selected ? theme.accent : theme.border,
           borderWidth: selected ? 2 : 1,
-          borderColor: selected
-            ? theme.accent
-            : isHighlight
-              ? theme.accent
-              : theme.border,
           borderRadius: theme.radii.lg,
-          padding: theme.spacing.lg,
-          gap: theme.spacing.sm,
+          padding: theme.spacing.md,
+          gap: 4,
         }}
       >
-        {plan.tag ? (
+        {tag ? (
           <View
             style={{
               position: "absolute",
               top: -10,
-              right: 14,
-              backgroundColor: isHighlight ? theme.accent : theme.surface2,
-              borderColor: isHighlight ? "transparent" : theme.accent,
-              borderWidth: isHighlight ? 0 : 1,
+              right: 10,
+              backgroundColor: selected ? theme.accent : theme.surface2,
+              borderColor: selected ? "transparent" : theme.accent,
+              borderWidth: selected ? 0 : 1,
               borderRadius: theme.radii.pill,
               paddingHorizontal: 8,
               paddingVertical: 4,
@@ -497,83 +790,45 @@ function PlanCard({
           >
             <Text
               style={{
-                color: isHighlight ? theme.bg : theme.accent,
-                fontSize: 10,
+                color: selected ? theme.bg : theme.accent,
+                fontSize: 9,
                 fontWeight: theme.fontWeights.bold,
                 letterSpacing: theme.tracking.label,
               }}
             >
-              {plan.tag}
+              {tag}
             </Text>
           </View>
         ) : null}
-
-        <View
+        <Text
           style={{
-            flexDirection: "row",
-            justifyContent: "space-between",
-            alignItems: "baseline",
+            color: theme.dim,
+            fontSize: 11,
+            fontWeight: theme.fontWeights.bold,
+            letterSpacing: theme.tracking.label,
+            textTransform: "uppercase",
           }}
         >
-          <Text
-            style={{
-              color: theme.text,
-              fontSize: theme.fontSizes.lg,
-              fontWeight: theme.fontWeights.bold,
-            }}
-          >
-            {plan.title}
-          </Text>
-          {priceString ? (
-            <Text
-              style={{
-                color: selected || isHighlight ? theme.accent : theme.text,
-                fontSize: theme.fontSizes.lg,
-                fontWeight: theme.fontWeights.bold,
-              }}
-            >
-              {priceString}
-              <Text
-                style={{
-                  color: theme.dim,
-                  fontSize: theme.fontSizes.sm,
-                  fontWeight: theme.fontWeights.medium,
-                }}
-              >
-                {periodSuffix}
-              </Text>
-            </Text>
-          ) : null}
-        </View>
-
+          {label}
+        </Text>
         <Text
           style={{
             color: selected ? theme.accent : theme.text,
-            fontSize: theme.fontSizes.md,
-            fontWeight: theme.fontWeights.semibold,
-            lineHeight: theme.fontSizes.md * theme.lineHeights.body,
+            fontSize: theme.fontSizes.lg,
+            fontWeight: theme.fontWeights.bold,
           }}
         >
-          {plan.tagline}
+          {priceString ?? "—"}
+          <Text
+            style={{
+              color: theme.dim,
+              fontSize: theme.fontSizes.sm,
+              fontWeight: theme.fontWeights.medium,
+            }}
+          >
+            {priceString ? periodSuffix : ""}
+          </Text>
         </Text>
-
-        <View style={{ gap: 4, marginTop: 2 }}>
-          {plan.bullets.map((b, i) => (
-            <View key={i} style={{ flexDirection: "row", gap: 8 }}>
-              <Text style={{ color: theme.accent, fontSize: 13 }}>•</Text>
-              <Text
-                style={{
-                  flex: 1,
-                  color: theme.dim,
-                  fontSize: theme.fontSizes.sm,
-                  lineHeight: theme.fontSizes.sm * theme.lineHeights.body,
-                }}
-              >
-                {b}
-              </Text>
-            </View>
-          ))}
-        </View>
       </View>
     </Pressable>
   );

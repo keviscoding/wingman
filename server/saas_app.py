@@ -159,7 +159,61 @@ def _seed_persistent_account() -> None:
         print(f"[seed] Failed: {exc}")
 
 
+def _bootstrap_sentry() -> None:
+    """Wire up Sentry error reporting if a DSN is configured.
+
+    Set ``SENTRY_DSN`` (and optionally ``SENTRY_ENVIRONMENT``,
+    ``SENTRY_TRACES_SAMPLE_RATE``) in DO env vars. With no DSN set
+    Sentry is silently skipped — nothing fails locally or in CI.
+
+    What we capture: unhandled exceptions in any FastAPI handler,
+    plus the FastAPI integration auto-tags request method/route.
+    PII is filtered: we never send the body (which can contain
+    screenshots / chat text) or auth headers.
+    """
+    dsn = (os.getenv("SENTRY_DSN") or "").strip()
+    if not dsn:
+        return
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.starlette import StarletteIntegration
+
+        sentry_sdk.init(
+            dsn=dsn,
+            environment=os.getenv("SENTRY_ENVIRONMENT", "production"),
+            traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.05")),
+            send_default_pii=False,
+            integrations=[
+                FastApiIntegration(transaction_style="endpoint"),
+                StarletteIntegration(transaction_style="endpoint"),
+            ],
+            # Strip request body + auth headers before send so we never
+            # ship screenshots or JWTs to Sentry's servers.
+            before_send=lambda event, _hint: _scrub_sentry_event(event),
+        )
+        print(f"[sentry] Initialized (env={os.getenv('SENTRY_ENVIRONMENT', 'production')})")
+    except Exception as exc:
+        print(f"[sentry] Init failed: {exc}")
+
+
+def _scrub_sentry_event(event: dict) -> dict:
+    """Drop request body + auth headers from any Sentry event."""
+    try:
+        req = event.get("request") or {}
+        if "data" in req:
+            req["data"] = "[scrubbed]"
+        headers = req.get("headers") or {}
+        for k in list(headers.keys()):
+            if k.lower() in ("authorization", "cookie", "x-revenuecat-token"):
+                headers[k] = "[scrubbed]"
+    except Exception:
+        pass
+    return event
+
+
 _bootstrap_gcp_credentials()
+_bootstrap_sentry()
 _saas_db.init_db()
 _seed_persistent_account()
 

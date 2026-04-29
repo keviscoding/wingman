@@ -87,37 +87,54 @@ export default function ChatDetailScreen() {
   const [mode, setMode] = useMode();
 
   const load = useCallback(
-    async (force = false) => {
+    async (opts?: { background?: boolean }) => {
       if (!token || !id) return;
-      // Skip the fetch on first mount if we already have the cached
-      // result — saves a 200-300ms flash.
-      if (!force && data) return;
-      setLoading(true);
+      // When background=true we don't show a spinner because the
+      // cached result is already on screen — we're only refreshing
+      // server-side fields like locked_context that the cache doesn't
+      // carry.
+      const background = !!opts?.background;
+      if (!background) {
+        setLoading(true);
+      }
       setError(null);
       try {
         const r = await api.getChat(token, id);
         setData(r);
         // Hydrate the locked-context inputs from the server response.
-        // Don't clobber whatever the user is currently typing.
+        // Hydrating these from the server is the WHOLE reason we still
+        // hit the network even when the cached capture-result already
+        // populated `data` — the in-memory cache only carries
+        // messages/replies and would otherwise leave the lock UI
+        // looking empty even when the user has one saved.
         if (typeof r?.locked_context === "string") {
           setLockedDraft(r.locked_context);
           setLockedSaved(!!r.locked_context_enabled);
-          // Auto-expand the section so the user sees the lock state
-          // without an extra tap if they have one configured.
           if (r.locked_context_enabled) setShowLocked(true);
         }
       } catch (e: any) {
-        setError(e instanceof ApiError ? e.detail : e?.message || "error");
+        if (!background) {
+          setError(e instanceof ApiError ? e.detail : e?.message || "error");
+        }
+        // On background refresh failures we silently keep the cached
+        // data — better UX than flashing an error over working content.
       } finally {
-        setLoading(false);
+        if (!background) setLoading(false);
       }
     },
-    [token, id, data],
+    [token, id],
   );
 
-  // Initial fetch only fires when there's no cached result.
+  // Always fetch on mount. If we already have cached data (from a
+  // fresh capture), do it as a background refresh so the user sees
+  // an instant first paint AND the server-only fields (locked_context,
+  // locked_context_enabled) get populated.
   useEffect(() => {
-    if (!data) load();
+    if (data) {
+      void load({ background: true });
+    } else {
+      void load();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

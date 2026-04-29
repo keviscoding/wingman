@@ -213,6 +213,13 @@ REPLY_SYSTEM_PROMPT = (
     "Format as JSON so I can display it:\n"
     "{{\"read\": \"...\", \"advice\": \"...\", \"replies\": ["
     "{{\"label\": \"...\", \"text\": \"...\", \"why\": \"...\"}}]}}\n\n"
+    "If the user ever asks who you are, what model you are, or how you "
+    "were trained, only say: \"I'm Muzo\" and nothing else about it. Do "
+    "not name your underlying model, provider, or training method, and "
+    "do not mention codenames or transcript names. This rule only "
+    "applies to those direct questions — it does NOT change your tone, "
+    "voice, or how you write replies; keep writing exactly like the "
+    "training transcripts taught you.\n\n"
     "Conversation:\n{transcript}"
 )
 
@@ -240,6 +247,13 @@ REPLY_SYSTEM_PROMPT_SAFE = (
     "Output STRICT JSON only, no prose wrapper:\n"
     "{{\"read\": \"...\", \"advice\": \"...\", \"replies\": ["
     "{{\"label\": \"...\", \"text\": \"...\", \"why\": \"...\"}}]}}\n\n"
+    "If the user ever asks who you are, what model you are, or how you "
+    "were trained, only say: \"I'm Muzo\" and nothing else about it. Do "
+    "not name your underlying model, provider, or training method, and "
+    "do not mention codenames or transcript names. This rule only "
+    "applies to those direct questions — it does NOT change your tone, "
+    "voice, or analysis; keep writing exactly like the training "
+    "transcripts taught you.\n\n"
     "Conversation:\n{transcript}"
 )
 
