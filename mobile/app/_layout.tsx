@@ -141,6 +141,12 @@ function RootPaywall() {
       subtitle =
         "You've been hitting the Pro daily cap. Pro Max gives you 100 Pro replies a day, priority queue, and early features.";
       break;
+    case "device_already_used":
+      pretitle = "TRIAL ALREADY USED";
+      title = "This device's free trial is done";
+      subtitle =
+        "Another account on this device already used the free trial. Subscribe to keep generating replies.";
+      break;
     default:
       title = undefined;
       subtitle = undefined;

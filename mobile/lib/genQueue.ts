@@ -132,7 +132,8 @@ async function runJob(token: string, job: Job, refreshMe?: () => void) {
       detail === "pro_locked_free" ||
       detail === "daily_cap_free" ||
       detail === "lifetime_trial_exhausted" ||
-      detail === "daily_cap_paid_pro"
+      detail === "daily_cap_paid_pro" ||
+      detail === "device_already_used"
     ) {
       openPaywall(detail as any);
     }
@@ -202,7 +203,8 @@ async function runJob(token: string, job: Job, refreshMe?: () => void) {
         detail === "pro_locked_free" ||
         detail === "daily_cap_free" ||
         detail === "lifetime_trial_exhausted" ||
-        detail === "daily_cap_paid_pro"
+        detail === "daily_cap_paid_pro" ||
+        detail === "device_already_used"
       ) {
         openPaywall(detail as any);
       }

@@ -211,7 +211,13 @@ CREATE TABLE IF NOT EXISTS users (
   -- Used to deny free-trial credits to secondary accounts created
   -- from a device that has already burned a previous account's trial.
   -- Null tolerated for legacy rows + clients that don't send it.
-  device_id            TEXT
+  device_id            TEXT,
+  -- True when this account was created on a device that already had
+  -- a prior account. Such accounts get zero free generations
+  -- (no lifetime trial, no daily allowance) — they must subscribe.
+  -- This closes the "make new account → still get 2 Quick/day"
+  -- loophole the lifetime cap on its own can't.
+  free_trial_blocked   BOOLEAN NOT NULL DEFAULT FALSE
 );
 -- NB: index on device_id is created in init_db() after the backfill
 -- step adds the column on existing deployments. Putting it here
@@ -287,6 +293,12 @@ def init_db() -> None:
         _backfill_column(conn, "users", "pro_daily_count", "BIGINT NOT NULL DEFAULT 0")
         _backfill_column(conn, "users", "push_token", "TEXT")
         _backfill_column(conn, "users", "device_id", "TEXT")
+        # Postgres BOOLEAN; SQLite tolerates the same DDL but stores
+        # 0/1 ints. Default FALSE so legacy rows keep the free tier.
+        _backfill_column(
+            conn, "users", "free_trial_blocked",
+            "BOOLEAN NOT NULL DEFAULT FALSE",
+        )
         # Index on device_id for fast lookup of prior accounts on
         # the same device. IF NOT EXISTS so it's safe to re-run.
         try:
@@ -385,13 +397,13 @@ def create_user(
     # Either the standard "fresh trial" insert, or the gated "no
     # trial — must subscribe" insert depending on pre_exhaust.
     if pre_exhaust:
-        # Cap their counters at the trial threshold so can_generate()
-        # returns False until they upgrade. They can still use the
-        # daily Quick allowance (2/day for free) once the trial-spent
-        # threshold doesn't matter — that's by design, since the daily
-        # cap already protects margins.
-        # Caps live further down in this module; reference via globals
-        # so the values stay in one place.
+        # Secondary account on a device that's already produced an
+        # account. Hard-block the entire free tier for this account:
+        #   • lifetime_gens_used pre-set to cap → no Quick lifetime trial
+        #   • pro_lifetime_used pre-set to cap → no Pro lifetime trial
+        #   • free_trial_blocked = TRUE        → no daily allowance either
+        # Net result: must subscribe to use the app at all. Closes the
+        # "log out, make new account, still get 2 Quick/day" loophole.
         cap_quick = globals().get("FREE_LIFETIME_TRIAL", 10)
         cap_pro = globals().get("FREE_PRO_LIFETIME_TRIAL", 3)
         with connect() as conn:
@@ -400,8 +412,8 @@ def create_user(
                 INSERT INTO users
                     (id, email, password_hash, display_name, plan,
                      lifetime_gens_used, pro_lifetime_used,
-                     created_at, device_id)
-                VALUES (?, ?, ?, ?, 'free', ?, ?, ?, ?)
+                     created_at, device_id, free_trial_blocked)
+                VALUES (?, ?, ?, ?, 'free', ?, ?, ?, ?, ?)
                 """,
                 (
                     user_id,
@@ -412,12 +424,16 @@ def create_user(
                     cap_pro,
                     now,
                     device_id_clean,
+                    True,
                 ),
             )
             row = conn.execute(
                 "SELECT * FROM users WHERE id = ?", (user_id,)
             ).fetchone()
-            print(f"[signup] device {device_id_clean[:12]}… already seen; new user {user_id} starts with trial=0")
+            print(
+                f"[signup] device {device_id_clean[:12]}… already seen; "
+                f"new user {user_id} starts with trial=0 and free tier blocked"
+            )
         return dict(row)
 
     with connect() as conn:
@@ -596,6 +612,9 @@ def get_user_quota_state(user_id: str) -> dict:
         "is_subscribed": bool(
             user.get("subscription_until") and user["subscription_until"] > now
         ),
+        # SQLite stores BOOL as 0/1; normalise to a real bool so the
+        # downstream check can do `if q.get("free_trial_blocked"):`
+        "free_trial_blocked": bool(user.get("free_trial_blocked")),
     }
 
 
@@ -695,6 +714,11 @@ def can_generate(user_id: str, mode: str = "fast") -> tuple[bool, str]:
         return True, ""
 
     # ─── Free tier ───
+    # Secondary account on a device that's already produced one is
+    # entirely shut out of the free tier — they must subscribe. This
+    # closes the "log out, sign up again, get 2 Quick/day" loophole.
+    if q.get("free_trial_blocked"):
+        return False, "device_already_used"
     if mode == "pro":
         if q["pro_lifetime_used"] < FREE_PRO_LIFETIME_TRIAL:
             return True, ""

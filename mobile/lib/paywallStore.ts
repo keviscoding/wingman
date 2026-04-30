@@ -10,6 +10,7 @@ export type PaywallReason =
   | "lifetime_trial_exhausted"   // free user out of lifetime trials entirely
   | "daily_cap_paid_pro"         // Pro subscriber hit Pro daily cap → suggest Pro Max
   | "pro_max_upsell"             // server-detected upsell signal
+  | "device_already_used"        // secondary account on this device — must subscribe
   | "manual";                    // user tapped Upgrade in settings
 
 let openedReason: PaywallReason | null = null;
