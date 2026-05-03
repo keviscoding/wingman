@@ -70,3 +70,22 @@ wingman CHATS LOOK UPDATE/
 # Local-only secret credential files - never commit
 VERTEX AI JSON/
 *.json.creds
+
+# Google Cloud service account keys — NEVER commit these.
+# Match every known auto-generated naming pattern so a stray download
+# in the repo can't slip through. If you ever need a legitimate JSON
+# file that matches one of these patterns, whitelist it with "!name".
+*-service-account*.json
+*-serviceaccount*.json
+*-firebase-*.json
+*-adminsdk-*.json
+*iam.gserviceaccount.com*.json
+nicheflix-*.json
+wingman-*.json
+muzo-*.json
+google-services-*.json
+gcp-*.json
+vertex-*.json
+# ALSO: if a raw .json file is sitting at the repo root it's almost
+# always a mistake. Whitelist only the ones we explicitly need.
+/*.json
