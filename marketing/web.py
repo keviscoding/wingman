@@ -16,6 +16,7 @@ bundles Playwright + Chromium — see ``marketing/Dockerfile``.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import os
@@ -480,7 +481,11 @@ async def api_generate(
     if not corpus:
         raise HTTPException(status_code=500, detail="training corpus missing")
 
-    script = generate_one(
+    # generate_one makes blocking Gemini API calls. Offload to a
+    # worker thread so we don't tie up the event loop and starve
+    # the mobile API running in the same process.
+    script = await asyncio.to_thread(
+        generate_one,
         mode=mode,  # type: ignore[arg-type]
         opener_bias=opener_bias,  # type: ignore[arg-type]
         length=length,
@@ -516,7 +521,12 @@ async def api_generate(
             uploaded_target.write_bytes(hook_path.read_bytes())
             script["_hook_image"] = uploaded_target.name
 
-    manifest = render_script(
+    # render_script uses Playwright's SYNC API which refuses to run
+    # inside an asyncio event loop. Running it in a worker thread
+    # gives it a fresh thread (no loop), which Playwright is happy
+    # with. Same trick works for blocking Gemini above.
+    manifest = await asyncio.to_thread(
+        render_script,
         script, frames_dir,
         contact_name=contact_name,
         include_typing_at_reveal=True,
