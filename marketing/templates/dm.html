@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=1080, initial-scale=1" />
+<title>Muzo DM Frame</title>
+<style>
+  /* Target: 1080 x 1920 vertical video frame.
+     The whole DM UI sits centered on a solid black bg that matches
+     Instagram's native dark mode. Editors can overlay this over B-roll
+     or use it as the dominant layer — either works. */
+  :root {
+    color-scheme: dark;
+    --bg:            #000000;
+    --panel:         #000000;
+    --divider:       #262626;
+    --theme-gray:    #ffffff;    /* nav text */
+    --bubble-theirs: #262626;    /* dark grey - her (from their side) */
+    /* Pure-purple IG gradient. The real IG outgoing bubble gradient
+       goes purple→orange→yellow, but the trending TikTok / Reels
+       aesthetic is the purple-to-magenta slice only — more modern
+       and reads cleaner at small sizes over B-roll. */
+    --bubble-mine:   linear-gradient(135deg, #7928ca 0%, #c026d3 55%, #db2777 100%);
+    --text:          #ffffff;
+    --text-dim:      #a8a8a8;
+    --ring-1:        #f58529;
+    --ring-2:        #dd2a7b;
+    --ring-3:        #8134af;
+  }
+  * { box-sizing: border-box; -webkit-font-smoothing: antialiased; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    width: 1080px;
+    height: 1920px;
+    overflow: hidden;
+    font-family: -apple-system, 'SF Pro Display', 'Helvetica Neue', 'Segoe UI', Roboto, system-ui, sans-serif;
+    font-weight: 400;
+    font-size: 28px;
+    line-height: 1.3;
+  }
+  #root {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    padding: 60px 40px 80px;
+  }
+  /* ── Top nav bar (Instagram DM header) ── */
+  .nav {
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    padding: 0 6px 20px;
+    border-bottom: 1px solid var(--divider);
+  }
+  .nav .back {
+    font-size: 48px;
+    color: var(--text);
+    line-height: 1;
+  }
+  .nav .avatar-wrap {
+    position: relative;
+    width: 86px;
+    height: 86px;
+  }
+  .nav .avatar-ring {
+    position: absolute;
+    inset: 0;
+    border-radius: 999px;
+    background: conic-gradient(from 45deg, var(--ring-1), var(--ring-2), var(--ring-3), var(--ring-1));
+    padding: 3px;
+  }
+  .nav .avatar {
+    width: 100%;
+    height: 100%;
+    background: #111 center / cover no-repeat;
+    border-radius: 999px;
+    border: 3px solid #000;
+    display: block;
+  }
+  .nav .who {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+  }
+  .nav .who .name {
+    font-weight: 700;
+    font-size: 32px;
+    color: var(--text);
+  }
+  .nav .who .sub {
+    font-size: 22px;
+    color: var(--text-dim);
+  }
+  .nav .icons {
+    display: flex;
+    gap: 32px;
+    font-size: 44px;
+    color: var(--text);
+  }
+  /* ── Inline story-reply attachment ──
+     Modern Instagram look: the story thumbnail floats to the RIGHT
+     (same side as the sender's bubble) above the first "him" message
+     with a tiny "Replied to their story" caption. Not a full banner
+     spanning the whole chat. Feels native to how IG actually shows
+     story replies. */
+  .story-reply-inline {
+    align-self: flex-end;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 10px;
+    margin-right: 0;
+    margin-bottom: 8px;
+    max-width: 72%;
+  }
+  .story-reply-inline .caption {
+    font-size: 22px;
+    color: var(--text-dim);
+    padding-right: 6px;
+  }
+  .story-reply-inline .thumb {
+    width: 170px;
+    height: 240px;
+    background: #111 center / cover no-repeat;
+    border-radius: 22px;
+    border: 2px solid #2a2a2a;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+  }
+  /* ── Messages area ── */
+  .thread {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 14px;
+    padding: 28px 10px 10px;
+    overflow: hidden;
+  }
+  .msg {
+    max-width: 72%;
+    padding: 22px 30px;
+    border-radius: 40px;
+    font-size: 30px;
+    line-height: 1.35;
+    color: var(--text);
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  }
+  .msg.him {
+    align-self: flex-end;
+    background: var(--bubble-mine);
+    border-bottom-right-radius: 12px;
+  }
+  .msg.her {
+    align-self: flex-start;
+    background: var(--bubble-theirs);
+    border-bottom-left-radius: 12px;
+  }
+  /* A group of consecutive messages from same speaker:
+     flatten the adjacent corners so they look like iOS stacked bubbles. */
+  .msg.him + .msg.him { border-top-right-radius: 12px; border-bottom-right-radius: 12px; }
+  .msg.him.last       { border-bottom-right-radius: 12px; }
+  .msg.her + .msg.her { border-top-left-radius: 12px;  border-bottom-left-radius: 12px; }
+  .msg.her.last       { border-bottom-left-radius: 12px; }
+
+  /* Typing indicator — used for the "reveal" pause frame */
+  .typing {
+    align-self: flex-start;
+    background: var(--bubble-theirs);
+    padding: 22px 28px;
+    border-radius: 40px;
+    display: none;
+  }
+  .typing.on { display: flex; gap: 8px; align-items: center; }
+  .typing span {
+    width: 12px;
+    height: 12px;
+    background: var(--text-dim);
+    border-radius: 999px;
+  }
+  /* ── Bottom chrome (message input) ── */
+  .compose {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 20px 10px;
+    border-top: 1px solid var(--divider);
+    margin-top: 16px;
+  }
+  .compose .plus {
+    width: 56px;
+    height: 56px;
+    border-radius: 999px;
+    background: var(--bubble-theirs);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text);
+    font-size: 36px;
+    flex-shrink: 0;
+  }
+  .compose .input {
+    flex: 1;
+    padding: 18px 28px;
+    border-radius: 36px;
+    border: 1.5px solid var(--divider);
+    color: var(--text-dim);
+    font-size: 22px;
+  }
+  .compose .right-icons {
+    display: flex;
+    gap: 24px;
+    color: var(--text);
+    font-size: 38px;
+  }
+</style>
+</head>
+<body>
+<div id="root">
+  <!-- NAV -->
+  <div class="nav">
+    <div class="back">‹</div>
+    <div class="avatar-wrap">
+      <div class="avatar-ring">
+        <div class="avatar" id="avatar"></div>
+      </div>
+    </div>
+    <div class="who">
+      <div class="name" id="contact-name">their_name</div>
+      <div class="sub">Active now</div>
+    </div>
+    <div class="icons">
+      <span>📞</span><span>📹</span>
+    </div>
+  </div>
+
+  <!-- THREAD (bubbles + inline story-reply attachment injected by JS) -->
+  <div class="thread" id="thread">
+    <!-- Inline story-reply attachment renders here, before the first him bubble -->
+    <div class="story-reply-inline" id="story-reply-inline" style="display:none">
+      <div class="caption" id="story-caption">Replied to their story</div>
+      <div class="thumb" id="story-thumb"></div>
+    </div>
+    <div class="typing" id="typing"><span></span><span></span><span></span></div>
+  </div>
+
+  <!-- COMPOSE BAR -->
+  <div class="compose">
+    <div class="plus">＋</div>
+    <div class="input">Message…</div>
+    <div class="right-icons"><span>🎤</span><span>🖼</span><span>＋</span></div>
+  </div>
+</div>
+
+<script>
+  // Window API the Python renderer calls into. Playwright evaluates
+  // these via page.evaluate() — we never load this page standalone.
+  window.__RENDER__ = {
+    /** Set the top-of-chat metadata (avatar, name) and optionally
+     *  enable the inline story-reply attachment with a thumbnail. */
+    setup(cfg) {
+      if (cfg.avatar_url) {
+        document.getElementById('avatar').style.backgroundImage =
+          `url('${cfg.avatar_url}')`;
+        document.getElementById('story-thumb').style.backgroundImage =
+          `url('${cfg.avatar_url}')`;
+      }
+      if (cfg.contact_name) {
+        document.getElementById('contact-name').textContent = cfg.contact_name;
+      }
+      if (cfg.hook_caption) {
+        document.getElementById('story-caption').textContent = cfg.hook_caption;
+      }
+      // Inline story reply is shown only when we have an image AND
+      // the pipeline didn't explicitly suppress it.
+      const inline = document.getElementById('story-reply-inline');
+      const shouldShow = !!cfg.avatar_url && !cfg.hide_story_reply;
+      inline.style.display = shouldShow ? 'flex' : 'none';
+    },
+    /** Render up to `upto` messages visible. Each message is drawn
+     *  fresh based on the full list so consecutive-same-speaker
+     *  styling is consistent. */
+    setMessages(messages, upto, opts) {
+      opts = opts || {};
+      const thread = document.getElementById('thread');
+      // Remove all bubble nodes but keep the typing indicator + story reply.
+      const typing = document.getElementById('typing');
+      [...thread.querySelectorAll('.msg')].forEach(n => n.remove());
+      const vis = messages.slice(0, upto);
+      vis.forEach((m, i) => {
+        const bubble = document.createElement('div');
+        bubble.className = 'msg ' + (m.speaker === 'him' ? 'him' : 'her');
+        const next = vis[i + 1];
+        const isLastOfRun = !next || next.speaker !== m.speaker;
+        if (isLastOfRun) bubble.classList.add('last');
+        bubble.textContent = m.text;
+        thread.insertBefore(bubble, typing);
+      });
+      // Typing indicator, if requested (used at reveal frame).
+      typing.classList.toggle('on', !!opts.typing);
+    },
+  };
+</script>
+</body>
+</html>
