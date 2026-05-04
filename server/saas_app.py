@@ -236,6 +236,22 @@ app.add_middleware(
 app.include_router(_saas_router)
 
 
+# Mount the Muzo Chat Gen editor tool at /editor/* — same process,
+# same deployment, same env vars. Rendered Chromium sits beside the
+# mobile API; if memory becomes a concern we split this off into its
+# own DO app, but for now consolidating keeps infra simple.
+#
+# Gated by MUZO_EDITOR_TOKEN (editors open /editor/?token=...).
+# If the import fails (e.g. Playwright deps missing in a dev env),
+# we log and continue — the mobile API stays alive.
+try:
+    from marketing.web import app as _editor_app
+    app.mount("/editor", _editor_app)
+    print("[saas] editor tool mounted at /editor")
+except Exception as exc:
+    print(f"[saas] editor tool NOT mounted (ok in dev): {exc}")
+
+
 # Liveness / readiness — DO's health check pings this. Kept dirt-simple
 # so it never returns 5xx even if a downstream Gemini call is failing.
 @app.get("/health")

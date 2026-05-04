@@ -29,12 +29,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-from wingman.config import (
-    PRO_MODEL,
-    make_genai_client,
-    rotate_api_key,
-)
 from google.genai import types as gtypes
+
+from .client import PRO_MODEL, make_genai_client, rotate_api_key
 
 from .corpus import load_raw_corpus
 from .prompts import (

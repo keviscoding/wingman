@@ -328,6 +328,15 @@ INDEX_HTML = """<!doctype html>
 </main>
 <script>
   const TOKEN_FROM_URL = new URLSearchParams(location.search).get('token') || '';
+  // Compute the mount base so API calls work whether we're served
+  // at / (standalone dev) or /editor/ (mounted under the main backend).
+  // location.pathname is /, /editor/, or /editor — normalize to a
+  // trailing-slash-free base prefix we can concatenate to paths.
+  const BASE = (() => {
+    let p = location.pathname || '/';
+    if (p.endsWith('/')) p = p.slice(0, -1);
+    return p;  // "" when at root, "/editor" when mounted
+  })();
   const statusEl = document.getElementById('status');
   const pillEl = document.getElementById('status-pill');
   const previewEl = document.getElementById('script-preview');
@@ -372,7 +381,7 @@ INDEX_HTML = """<!doctype html>
     if (TOKEN_FROM_URL) fd.append('token', TOKEN_FROM_URL);
 
     try {
-      const r = await fetch('/api/generate', { method: 'POST', body: fd });
+      const r = await fetch(BASE + '/api/generate', { method: 'POST', body: fd });
       if (!r.ok) {
         const txt = await r.text();
         throw new Error(txt || ('http ' + r.status));
@@ -388,7 +397,7 @@ INDEX_HTML = """<!doctype html>
         previewEl.appendChild(line);
       });
       const framesHtml = (data.frames || []).map(f =>
-        `<img src="/api/job/${data.job_id}/frame/${encodeURIComponent(f)}" alt="${f}" />`
+        `<img src="${BASE}/api/job/${data.job_id}/frame/${encodeURIComponent(f)}" alt="${f}" />`
       ).join('');
       framesEl.innerHTML = '<div class="grid">' + framesHtml + '</div>';
       setStatus(
@@ -408,7 +417,7 @@ INDEX_HTML = """<!doctype html>
   regenBtn.addEventListener('click', generate);
   downloadBtn.addEventListener('click', () => {
     if (!currentJobId) return;
-    const url = `/api/job/${currentJobId}/zip` + (TOKEN_FROM_URL ? `?token=${encodeURIComponent(TOKEN_FROM_URL)}` : '');
+    const url = BASE + `/api/job/${currentJobId}/zip` + (TOKEN_FROM_URL ? `?token=${encodeURIComponent(TOKEN_FROM_URL)}` : '');
     window.location.href = url;
   });
 </script>
