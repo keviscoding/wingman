@@ -12,7 +12,7 @@
 # renderer screenshots HTML via headless Chromium, so we NEED a real
 # browser available. The mobile backend doesn't care either way.
 
-FROM mcr.microsoft.com/playwright/python:v1.47.0-jammy
+FROM mcr.microsoft.com/playwright/python:v1.59.0-jammy
 
 # Build tools needed for Pillow + python-Levenshtein C extensions.
 RUN apt-get update && apt-get install -y --no-install-recommends \

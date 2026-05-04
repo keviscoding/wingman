@@ -21,4 +21,8 @@ psycopg[binary]>=3.2.0
 # Editor tool (/editor/*) renders Instagram DM frames via headless
 # Chromium. The Chromium binary itself ships in the Playwright base
 # image used by the Dockerfile — we just need the Python bindings.
-playwright>=1.47.0
+# Pinned to match the base image version (mcr.microsoft.com/playwright/
+# python:v1.59.0-jammy) — a version skew causes the Python package
+# to look for a different Chromium build number than what's installed
+# and crash with "Executable doesn't exist" at first render.
+playwright==1.59.0
