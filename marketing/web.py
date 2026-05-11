@@ -397,8 +397,13 @@ INDEX_HTML = """<!doctype html>
         line.textContent = `${arrow} ${m.text}`;
         previewEl.appendChild(line);
       });
+      // Frame image URLs must carry the editor token in the query
+      // string. Without it, the frame endpoint returns 401 and the
+      // grid shows alt-text placeholders instead of previews.
+      // The download/zip route below already does the same trick.
+      const tokenSuffix = TOKEN_FROM_URL ? `?token=${encodeURIComponent(TOKEN_FROM_URL)}` : '';
       const framesHtml = (data.frames || []).map(f =>
-        `<img src="${BASE}/api/job/${data.job_id}/frame/${encodeURIComponent(f)}" alt="${f}" />`
+        `<img src="${BASE}/api/job/${data.job_id}/frame/${encodeURIComponent(f)}${tokenSuffix}" alt="${f}" />`
       ).join('');
       framesEl.innerHTML = '<div class="grid">' + framesHtml + '</div>';
       setStatus(
