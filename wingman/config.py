@@ -99,6 +99,24 @@ LIVE_MODEL = os.getenv(
     "WINGMAN_LIVE_MODEL", "gemini-3.1-flash-live-preview"
 )
 
+# Quick mode (free-tier default + paid daily-cap mode) routing.
+#
+# QUICK_PATH controls which engine handles Quick generations:
+#   • "flash35"  — Gemini 3.5 Flash via AI Studio (DEFAULT).
+#                  Same playbook + system prompt as Pro, just on a
+#                  smaller/faster model. No Vertex AI required, so the
+#                  tuned-V2 endpoint can stay UN-deployed and we don't
+#                  pay $360/mo serving fees.
+#   • "tuned"    — Legacy path: hedged 5-parallel calls into the
+#                  fine-tuned Flash V2 endpoint on Vertex AI. Better
+#                  personality (we trained on PWF transcripts) but
+#                  needs the endpoint deployed = hourly cost.
+#
+# QUICK_MODEL is the model id used by the flash35 path. Override with
+# WINGMAN_QUICK_MODEL=<id> if Google ships a new flash version.
+QUICK_PATH = (os.getenv("WINGMAN_QUICK_PATH") or "flash35").strip().lower()
+QUICK_MODEL = os.getenv("WINGMAN_QUICK_MODEL", "gemini-3.5-flash")
+
 
 def permissive_safety_settings():
     """Safety-settings list for reply generation. Wingman is used for

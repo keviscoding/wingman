@@ -642,7 +642,167 @@ async def _generate_for_user_messages(
     messages: list[Message],
     extra_context: str = "",
 ) -> tuple[list[dict], str, str, str, float]:
-    """Fast path: tuned v4 Flash, hedged 5-parallel.
+    """Quick mode dispatcher.
+
+    Routes to whichever engine ``WINGMAN_QUICK_PATH`` env var selects:
+      - "flash35" (DEFAULT) — Gemini 3.5 Flash via AI Studio
+      - "tuned"             — fine-tuned Flash V2 on Vertex AI (legacy)
+
+    Falls back to Pro on any failure so users always get something.
+    """
+    from wingman.config import QUICK_PATH
+
+    if QUICK_PATH == "tuned":
+        return await _generate_quick_via_tuned(ctx, messages, extra_context)
+
+    # Default path — Flash 3.5
+    try:
+        return await _generate_quick_via_flash35(ctx, messages, extra_context)
+    except Exception as exc:
+        print(f"[saas-pipeline] flash35 quick errored ({exc}) — falling back to pro")
+        return await _generate_pro_for_user_messages(
+            ctx, messages, extra_context=extra_context,
+        )
+
+
+async def _generate_quick_via_flash35(
+    ctx: UserContext,
+    messages: list[Message],
+    extra_context: str = "",
+) -> tuple[list[dict], str, str, str, float]:
+    """Fast path using Gemini 3.5 Flash via AI Studio.
+
+    Same prompt structure and Master Playbook as Pro mode — the only
+    difference is the underlying model. 3.5 Flash is fast (~2s), cheap
+    (~$0.005/call), and preserves the trained personality because the
+    playbook is loaded into system_instruction either way.
+
+    Single attempt. If it returns empty / non-JSON / blocked we raise
+    and the dispatcher falls through to Pro.
+    """
+    from wingman.config import (
+        QUICK_MODEL, REPLY_SYSTEM_PROMPT,
+        make_genai_client, rotate_api_key,
+        permissive_safety_settings, _ALL_KEYS,
+    )
+    from wingman.training_rag import TrainingRAG
+    from google.genai import types as gtypes
+    from datetime import datetime
+
+    transcript = _format_transcript(messages)
+
+    # Load Master Playbook so 3.5 Flash gets the same personality
+    # context Pro does. Cached via TrainingRAG; ~9KB of distilled
+    # patterns from 121 training transcripts.
+    playbook = ""
+    try:
+        rag = TrainingRAG()
+        rag.load()
+        playbook = (rag.knowledge_summary or "").strip()
+    except Exception as exc:
+        print(f"[saas-pipeline] playbook load failed (quick): {exc}")
+
+    rules_only = REPLY_SYSTEM_PROMPT.split("Conversation:\n{transcript}")[0].rstrip()
+    system_instruction = "\n\n".join(p for p in (rules_only, playbook) if p)
+
+    now = datetime.now().strftime("%A %B %d, %Y at %I:%M %p")
+    user_parts = [
+        f"Current date/time: {now}.",
+        f"Conversation:\n{transcript}",
+    ]
+    if extra_context.strip():
+        user_parts.append(f"Additional context: {extra_context.strip()}")
+    user_parts.append(
+        "Format as JSON:\n"
+        '{"read": "...", "advice": "...", "replies": '
+        '[{"label": "...", "text": "...", "why": "..."}]}'
+    )
+    user_prompt = "\n\n".join(user_parts)
+
+    config_kwargs: dict = {
+        "system_instruction": system_instruction,
+        "temperature": 0.95,           # a bit higher than Pro's 0.9 — Flash
+                                        # benefits from more creativity slack
+        "max_output_tokens": 4096,     # JSON output is small; tight cap saves tokens
+        "response_mime_type": "application/json",
+    }
+    try:
+        config_kwargs["safety_settings"] = permissive_safety_settings()
+    except Exception:
+        pass
+
+    client = make_genai_client()
+    raw = ""
+    last_err: Exception | None = None
+    for _ in range(max(1, len(_ALL_KEYS))):
+        try:
+            resp = await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.models.generate_content,
+                    model=QUICK_MODEL,
+                    contents=[user_prompt],
+                    config=gtypes.GenerateContentConfig(**config_kwargs),
+                ),
+                timeout=25,
+            )
+            raw = (resp.text or "").strip()
+            if raw:
+                break
+        except Exception as exc:
+            last_err = exc
+            err = str(exc)
+            # Rate limit / quota — rotate key and retry
+            if "429" in err or "RESOURCE_EXHAUSTED" in err or "timeout" in err.lower():
+                rotate_api_key()
+                client = make_genai_client()
+                continue
+            # Anything else — bail; dispatcher falls through to Pro
+            raise
+
+    if not raw:
+        if last_err is not None:
+            raise last_err
+        raise RuntimeError("flash35 returned empty after key rotation")
+
+    # Strip code fences if Gemini wrapped despite response_mime_type
+    import re as _re
+    fence = _re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
+    if fence:
+        raw = fence.group(1).strip()
+
+    data = json.loads(raw)
+    replies = [
+        {
+            "label": r.get("label", "option"),
+            "text": r.get("text", ""),
+            "why":  r.get("why", ""),
+        }
+        for r in (data.get("replies") or [])
+        if r.get("text")
+    ]
+    if not replies:
+        raise RuntimeError("flash35 produced 0 valid replies")
+
+    # Cost estimate. 3.5 Flash is roughly $0.10/1M input, $0.40/1M output.
+    # Typical generation: ~10k input (system + playbook + transcript) +
+    # ~600 output tokens = ~$0.0013 ≈ 0.13 cents per call.
+    cost_cents = 0.15
+
+    return (
+        replies,
+        data.get("read", ""),
+        data.get("advice", ""),
+        QUICK_MODEL,
+        cost_cents,
+    )
+
+
+async def _generate_quick_via_tuned(
+    ctx: UserContext,
+    messages: list[Message],
+    extra_context: str = "",
+) -> tuple[list[dict], str, str, str, float]:
+    """Legacy fast path: tuned Flash V2 on Vertex AI, hedged 5-parallel.
 
     Returns (replies, read, advice, model_tag, cost_cents).
 
@@ -650,17 +810,14 @@ async def _generate_for_user_messages(
       - Vertex AI isn't configured (no service account on this host)
       - Tuned generation returns nothing or errors
 
-    The fallback keeps users unblocked — they just get a slower / more
-    expensive generation behind the scenes. The mobile app still sees
-    a normal "ready" job.
+    Selected by setting WINGMAN_QUICK_PATH=tuned. Default path is now
+    flash35 (see _generate_quick_via_flash35).
     """
     from wingman.tuned_flash_client import (
         generate_tuned_replies_json, is_tuned_configured, get_active_version,
     )
 
     if not is_tuned_configured():
-        # Vertex not wired on this deploy — fall back so users still
-        # get replies. Tag tells us in logs that this isn't ideal.
         print("[saas-pipeline] tuned not configured, falling back to pro")
         return await _generate_pro_for_user_messages(
             ctx, messages, extra_context=extra_context,
@@ -669,9 +826,6 @@ async def _generate_for_user_messages(
     msg_dicts = [
         {"speaker": m.speaker, "text": m.text} for m in messages
     ]
-    # Tuned can fail at runtime even when configured: Vertex auth bad,
-    # endpoint quota, model warm-up timeout. Catch everything and fall
-    # back to Pro rather than serving an empty 502 to the user.
     try:
         raw = await generate_tuned_replies_json(
             msg_dicts,
@@ -711,8 +865,6 @@ async def _generate_for_user_messages(
         return await _generate_pro_for_user_messages(
             ctx, messages, extra_context=extra_context,
         )
-    # Rough cost estimate — 5 calls × ~600 input + 80 output tokens at
-    # 2.5 Flash pricing.
     cost_cents = 0.05
     return (
         replies,
