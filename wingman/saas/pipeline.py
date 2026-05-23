@@ -688,16 +688,22 @@ async def _generate_quick_via_flash35(
 ) -> tuple[list[dict], str, str, str, float]:
     """Fast path using Gemini 3.5 Flash via AI Studio.
 
-    Same prompt structure and Master Playbook as Pro mode — the only
-    difference is the underlying model. 3.5 Flash is fast (~2s), cheap
-    (~$0.005/call), and preserves the trained personality because the
-    playbook is loaded into system_instruction either way.
+    Full feature parity with Pro mode except for the underlying model:
+      - REPLY_SYSTEM_PROMPT (personality + identity + brand-edge rules)
+      - Master Playbook (~9KB) injected in system_instruction
+      - Time context, transcript, extra context, JSON format reminder
+      - Multimodal: screenshot attached when available
+      - Permissive safety settings
+      - 3-tier retry: full+image → full-noimg → safe-prompt-noimg.
+        Mirrors Pro's tier strategy so spicy chats that get blocked by
+        Gemini's content filter don't bleed through to Pro (which
+        would 30x our cost for what could've been a Flash retry).
 
-    Single attempt. If it returns empty / non-JSON / blocked we raise
-    and the dispatcher falls through to Pro.
+    Raises only when ALL three tiers fail. The dispatcher then falls
+    through to Pro as a last resort.
     """
     from wingman.config import (
-        QUICK_MODEL, REPLY_SYSTEM_PROMPT,
+        QUICK_MODEL, REPLY_SYSTEM_PROMPT, REPLY_SYSTEM_PROMPT_SAFE,
         make_genai_client, rotate_api_key,
         permissive_safety_settings, _ALL_KEYS,
     )
@@ -718,97 +724,138 @@ async def _generate_quick_via_flash35(
     except Exception as exc:
         print(f"[saas-pipeline] playbook load failed (quick): {exc}")
 
-    rules_only = REPLY_SYSTEM_PROMPT.split("Conversation:\n{transcript}")[0].rstrip()
-    system_instruction = "\n\n".join(p for p in (rules_only, playbook) if p)
+    def build_system_instruction(safe: bool) -> str:
+        """Strip the trailing 'Conversation: {transcript}' placeholder
+        from the prompt template (we put the transcript in the user
+        turn instead) and concat the Master Playbook."""
+        base = REPLY_SYSTEM_PROMPT_SAFE if safe else REPLY_SYSTEM_PROMPT
+        rules_only = base.split("Conversation:\n{transcript}")[0].rstrip()
+        parts = [rules_only]
+        if playbook:
+            parts.append(playbook)
+        return "\n\n".join(parts)
 
-    now = datetime.now().strftime("%A %B %d, %Y at %I:%M %p")
-    user_parts = [
-        f"Current date/time: {now}.",
-        f"Conversation:\n{transcript}",
-    ]
-    if extra_context.strip():
-        user_parts.append(f"Additional context: {extra_context.strip()}")
-    user_parts.append(
-        "Format as JSON:\n"
-        '{"read": "...", "advice": "...", "replies": '
-        '[{"label": "...", "text": "...", "why": "..."}]}'
-    )
-    user_prompt = "\n\n".join(user_parts)
+    def build_user_prompt() -> str:
+        now = datetime.now().strftime("%A %B %d, %Y at %I:%M %p")
+        parts = [
+            f"Current date/time: {now}.",
+            f"Conversation:\n{transcript}",
+        ]
+        if extra_context.strip():
+            parts.append(f"Additional context: {extra_context.strip()}")
+        parts.append(
+            "Format as JSON:\n"
+            '{"read": "...", "advice": "...", "replies": '
+            '[{"label": "...", "text": "...", "why": "..."}]}'
+        )
+        return "\n\n".join(parts)
 
-    config_kwargs: dict = {
-        "system_instruction": system_instruction,
-        "temperature": 0.95,           # a bit higher than Pro's 0.9 — Flash
-                                        # benefits from more creativity slack
-        # 8k leaves comfortable headroom for "thinking" + JSON output
-        # without hitting truncation. Earlier 4k cap occasionally
-        # truncated JSON mid-message and the dispatcher fell through
-        # to Pro for nothing.
-        "max_output_tokens": 8192,
-        "response_mime_type": "application/json",
-    }
-    try:
-        config_kwargs["safety_settings"] = permissive_safety_settings()
-    except Exception:
-        pass
-
-    # Build the multimodal payload. Text first, then optionally image
-    # + a short note pointing the model at it (mirrors Pro mode's
-    # contents shape so prompts feel consistent across modes).
-    contents: list = [user_prompt]
+    image_part = None
     if img_bytes:
         try:
             image_part = gtypes.Part.from_bytes(
                 data=img_bytes, mime_type="image/jpeg",
             )
+        except Exception as exc:
+            print(f"[saas-pipeline] quick image-part build failed: {exc}")
+
+    def build_config(safe: bool):
+        # 8k leaves comfortable headroom for JSON output without
+        # truncation. Pro uses 16k because 3.1 Pro does extensive
+        # internal "thinking" before output; Flash 3.5 doesn't, so
+        # 8k is plenty (typical generation only uses 600-800 tokens).
+        kwargs = {
+            "system_instruction": build_system_instruction(safe),
+            "temperature": 0.95,
+            "max_output_tokens": 8192,
+            "response_mime_type": "application/json",
+        }
+        try:
+            kwargs["safety_settings"] = permissive_safety_settings()
+        except Exception:
+            pass
+        return gtypes.GenerateContentConfig(**kwargs)
+
+    async def attempt(safe: bool, with_image: bool) -> tuple[bool, dict | None, str]:
+        """One tier of the retry strategy. Returns (succeeded, parsed, err).
+
+        Rotates Gemini API keys on rate-limit / timeout. Surfaces
+        PROHIBITED_CONTENT separately so the caller can choose a
+        safer reframing on the next tier.
+        """
+        prompt = build_user_prompt()
+        contents: list = [prompt]
+        if with_image and image_part is not None:
             contents.append(image_part)
             contents.append(
                 "The screenshot above shows the actual chat. Use it for "
                 "visual context — read receipts, timestamps, online "
                 "status, profile photo vibe, anything text alone misses."
             )
-        except Exception as exc:
-            print(f"[saas-pipeline] quick image-part build failed: {exc}")
+        client = make_genai_client()
+        for _ in range(max(1, len(_ALL_KEYS))):
+            try:
+                resp = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        client.models.generate_content,
+                        model=QUICK_MODEL,
+                        contents=contents,
+                        config=build_config(safe=safe),
+                    ),
+                    timeout=30,
+                )
+                raw = (resp.text or "").strip()
+                if not raw:
+                    return False, None, "empty"
+                import re as _re
+                fence = _re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
+                if fence:
+                    raw = fence.group(1).strip()
+                return True, json.loads(raw), ""
+            except Exception as exc:
+                err = str(exc)
+                if (
+                    "PROHIBITED_CONTENT" in err
+                    or "blocked" in err.lower()
+                    or "safety" in err.lower()
+                ):
+                    return False, None, "prohibited_content"
+                if (
+                    "429" in err
+                    or "RESOURCE_EXHAUSTED" in err
+                    or "timeout" in err.lower()
+                ):
+                    rotate_api_key()
+                    client = make_genai_client()
+                    continue
+                return False, None, err
+        return False, None, "all_keys_exhausted"
 
-    client = make_genai_client()
-    raw = ""
-    last_err: Exception | None = None
-    for _ in range(max(1, len(_ALL_KEYS))):
-        try:
-            resp = await asyncio.wait_for(
-                asyncio.to_thread(
-                    client.models.generate_content,
-                    model=QUICK_MODEL,
-                    contents=contents,
-                    config=gtypes.GenerateContentConfig(**config_kwargs),
-                ),
-                timeout=30,
-            )
-            raw = (resp.text or "").strip()
-            if raw:
-                break
-        except Exception as exc:
-            last_err = exc
-            err = str(exc)
-            # Rate limit / quota — rotate key and retry
-            if "429" in err or "RESOURCE_EXHAUSTED" in err or "timeout" in err.lower():
-                rotate_api_key()
-                client = make_genai_client()
-                continue
-            # Anything else — bail; dispatcher falls through to Pro
-            raise
+    # 3-tier retry — same shape as Pro. Best quality first, progressively
+    # safer framings on each retry. We only fall through to the
+    # dispatcher (= Pro fallback) if ALL three tiers fail.
+    tiers: list[tuple[str, bool, bool]] = [
+        ("full+image", False, True),    # full prompt + image (best)
+        ("full-noimg", False, False),   # drop image (image may have triggered safety)
+        ("safe", True, False),          # reframed as analysis
+    ]
+    errors: list[tuple[str, str]] = []
+    data: dict | None = None
+    used_tier = ""
+    for label, safe, with_image in tiers:
+        ok, parsed, err = await attempt(safe=safe, with_image=with_image)
+        if ok:
+            data = parsed
+            used_tier = label
+            break
+        errors.append((label, err))
 
-    if not raw:
-        if last_err is not None:
-            raise last_err
-        raise RuntimeError("flash35 returned empty after key rotation")
+    if data is None:
+        # Surface in logs the tier-by-tier reasons so we can tell why
+        # the Quick path bled through to Pro on this generation.
+        print(f"[saas-pipeline] flash35 quick failed across all tiers: {errors}")
+        raise RuntimeError(f"flash35 quick exhausted tiers: {errors}")
 
-    # Strip code fences if Gemini wrapped despite response_mime_type
-    import re as _re
-    fence = _re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
-    if fence:
-        raw = fence.group(1).strip()
-
-    data = json.loads(raw)
     replies = [
         {
             "label": r.get("label", "option"),
@@ -819,12 +866,13 @@ async def _generate_quick_via_flash35(
         if r.get("text")
     ]
     if not replies:
-        raise RuntimeError("flash35 produced 0 valid replies")
+        raise RuntimeError(f"flash35 quick produced 0 valid replies (tier={used_tier})")
 
     # Cost estimate. 3.5 Flash is roughly $0.10/1M input, $0.40/1M output.
-    # Typical generation: ~10k input (system + playbook + transcript) +
-    # ~600 output tokens = ~$0.0013 ≈ 0.13 cents per call.
-    cost_cents = 0.15
+    # Image input adds ~1500 tokens (~$0.00015). Typical generation:
+    # ~10k input + ~600 output = ~$0.0013 ≈ 0.13 cents.
+    # Bump to 0.30 for the image-attached path.
+    cost_cents = 0.30 if image_part is not None else 0.15
 
     return (
         replies,
