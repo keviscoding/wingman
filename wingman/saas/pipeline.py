@@ -410,6 +410,17 @@ async def _resolve_chat_for_screenshot(
     candidates = db.chats_with_same_base_name(user_id, proposed_name)
     candidates = [c for c in candidates if c.get("messages")]
 
+    # Always log so we can audit disambiguator behavior in production
+    # (lets us tell, from runtime logs, whether the path is even firing
+    # for a given screenshot — separate from whether it routed correctly).
+    cand_summary = ", ".join(
+        f"{c['contact']}({len(c['messages'])}msg)" for c in candidates
+    ) or "(none)"
+    print(
+        f"[saas-pipeline] disambiguate proposed={proposed_name!r} "
+        f"candidates=[{cand_summary}]"
+    )
+
     if not candidates:
         return proposed_name
 

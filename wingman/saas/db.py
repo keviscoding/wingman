@@ -868,19 +868,31 @@ def chats_with_same_base_name(user_id: str, base_name: str) -> list[dict]:
     bn = (base_name or "").strip()
     if not bn:
         return []
-    # Match exact and " <N>" suffixed variants. Lower-case both sides
-    # so "esther" matches "Esther"/"ESTHER 3" etc.
-    pattern = bn + " %"
+    # First token of the proposed name = the "first-name key" we
+    # match against. So "Jess" matches "Jess", "Jess 2", "Jess Smith",
+    # "Jess (Hinge)", "Jess 🌹" — anyone whose stored contact starts
+    # with the same word. Without this, a screenshot extracted as
+    # "Jess" wouldn't see a stored chat called "Jess Smith" as a
+    # collision and we'd silently create a parallel "Jess" alongside
+    # the original — or worse, attempt to merge into the wrong row.
+    first_token = bn.split()[0] if bn else bn
+    exact_pattern = first_token  # equality
+    suffix_pattern = first_token + " %"  # "Jess 2", "Jess Smith", etc.
+    paren_pattern = first_token + " (%"  # "Jess (Hinge)" specifically
     with connect() as conn:
         rows = conn.execute(
             """
             SELECT id, contact, messages_json, meta_json, last_activity_at
               FROM chats
              WHERE user_id = ?
-               AND (lower(contact) = lower(?) OR lower(contact) LIKE lower(?))
+               AND (
+                    lower(contact) = lower(?)
+                 OR lower(contact) LIKE lower(?)
+                 OR lower(contact) LIKE lower(?)
+               )
              ORDER BY last_activity_at DESC
             """,
-            (user_id, bn, pattern),
+            (user_id, exact_pattern, suffix_pattern, paren_pattern),
         ).fetchall()
     out: list[dict] = []
     for r in rows:
