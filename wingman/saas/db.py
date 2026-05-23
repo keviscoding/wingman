@@ -851,6 +851,57 @@ def chat_save_meta(user_id: str, contact: str, meta: dict) -> None:
         )
 
 
+def chats_with_same_base_name(user_id: str, base_name: str) -> list[dict]:
+    """Find every chat for ``user_id`` whose contact name starts with
+    ``base_name`` — covers both exact matches and numbered variants
+    ("Esther", "Esther 2", "Esther 3", etc.).
+
+    Used by the same-name disambiguator: when a fresh screenshot's
+    extracted name collides with one or more existing chats, we hand
+    these candidates to a Flash Lite adjudicator to decide whether
+    the screenshot continues an existing conversation or belongs to
+    a brand-new chat for a different person with the same first name.
+
+    Returns rows shaped like chat_load (with messages + meta) so the
+    adjudicator can read each candidate's recent context.
+    """
+    bn = (base_name or "").strip()
+    if not bn:
+        return []
+    # Match exact and " <N>" suffixed variants. Lower-case both sides
+    # so "esther" matches "Esther"/"ESTHER 3" etc.
+    pattern = bn + " %"
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, contact, messages_json, meta_json, last_activity_at
+              FROM chats
+             WHERE user_id = ?
+               AND (lower(contact) = lower(?) OR lower(contact) LIKE lower(?))
+             ORDER BY last_activity_at DESC
+            """,
+            (user_id, bn, pattern),
+        ).fetchall()
+    out: list[dict] = []
+    for r in rows:
+        try:
+            msgs = json.loads(r["messages_json"] or "[]")
+        except Exception:
+            msgs = []
+        try:
+            meta = json.loads(r["meta_json"] or "{}")
+        except Exception:
+            meta = {}
+        out.append({
+            "id": r["id"],
+            "contact": r["contact"],
+            "messages": msgs,
+            "meta": meta,
+            "last_activity_at": r["last_activity_at"] or 0,
+        })
+    return out
+
+
 def chat_list(user_id: str) -> list[dict]:
     """Returns all chats for a user, newest activity first. Lightweight
     summaries — caller calls chat_load() for full message arrays when

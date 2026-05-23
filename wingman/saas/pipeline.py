@@ -299,6 +299,123 @@ def delete_chat_for_user(ctx: UserContext, chat_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Chat routing — same-name disambiguation
+# ---------------------------------------------------------------------------
+# When a screenshot's extracted contact name collides with one or more
+# existing chats (e.g. two girls both named "Esther"), we can't blindly
+# merge into whichever chat row was created first. We need to figure
+# out whether the screenshot is a CONTINUATION of an existing thread
+# or a NEW chat for a different person with the same first name.
+#
+# Decision tree:
+#   1. No candidates with the same base name → save under proposed name
+#   2. Exactly 1 candidate AND clear text overlap between screenshot
+#      and the candidate's recent tail → it's a continuation, no Flash
+#      call needed (saves money + latency in the common case)
+#   3. Otherwise → call the Flash Lite adjudicator. It reads the
+#      candidates' recent messages alongside the screenshot and votes
+#      "merge into A/B/C" or "new". This is the same module the
+#      desktop hotkey uses, ported over for mobile.
+#   4. If the adjudicator says "new", suffix a number to the name
+#      ("Esther" → "Esther 2") so both chats coexist cleanly.
+
+
+def _has_message_overlap(
+    new_msgs: list[dict],
+    cand_msgs: list[dict],
+    *,
+    tail_len: int = 5,
+) -> bool:
+    """Cheap exact-text overlap between a screenshot and a candidate
+    chat's recent tail. If any of the candidate's last ``tail_len``
+    messages appear verbatim in the screenshot's first 5 messages,
+    we treat it as a continuation and skip the Flash adjudicator.
+    """
+    if not new_msgs or not cand_msgs:
+        return False
+    cand_tail = {
+        (m.get("speaker"), (m.get("text") or "").strip())
+        for m in cand_msgs[-tail_len:]
+        if (m.get("text") or "").strip()
+    }
+    if not cand_tail:
+        return False
+    for m in new_msgs[:5]:
+        key = (m.get("speaker"), (m.get("text") or "").strip())
+        if key in cand_tail:
+            return True
+    return False
+
+
+def _disambiguate_chat_name(proposed: str, existing_names: list[str]) -> str:
+    """Return a contact name that doesn't collide with anything in
+    ``existing_names``. If the proposed name is free, return as-is;
+    otherwise append a counter ("Esther", "Esther 2", "Esther 3"…).
+    """
+    proposed = (proposed or "").strip() or "Chat"
+    existing_lower = {n.strip().lower() for n in existing_names if n}
+    if proposed.lower() not in existing_lower:
+        return proposed
+    n = 2
+    while f"{proposed} {n}".lower() in existing_lower:
+        n += 1
+    return f"{proposed} {n}"
+
+
+async def _resolve_chat_for_screenshot(
+    user_id: str,
+    proposed_name: str,
+    new_msgs: list[dict],
+) -> str:
+    """Pick the right chat for an incoming screenshot.
+
+    Returns the contact_name the caller should save under — either an
+    existing one (continuation) or a freshly-disambiguated new name.
+
+    Adjudicator failure is treated as "new" so we never silently merge
+    two distinct people. Slightly more chats > silent data loss.
+    """
+    # Step 1: gather same-base-name candidates.
+    candidates = db.chats_with_same_base_name(user_id, proposed_name)
+    candidates = [c for c in candidates if c.get("messages")]
+
+    if not candidates:
+        return proposed_name
+
+    # Step 2: exactly one candidate AND obvious text continuation
+    # (last few stored messages re-appear in the screenshot) → merge.
+    if len(candidates) == 1 and _has_message_overlap(new_msgs, candidates[0]["messages"]):
+        chosen = candidates[0]["contact"]
+        print(f"[saas-pipeline] same-name merge (text-overlap) → {chosen}")
+        return chosen
+
+    # Step 3: ask Flash Lite to adjudicate.
+    try:
+        from wingman.match_adjudicator import adjudicate_match
+        cand_pairs = [(c["contact"], c["messages"]) for c in candidates]
+        chosen, reason = await adjudicate_match(
+            new_msgs, cand_pairs,
+            extracted_name=proposed_name,
+            extracted_platform="",
+        )
+    except Exception as exc:
+        # If Flash is misbehaving, default to "new chat" so we never
+        # silently merge two different people.
+        print(f"[saas-pipeline] adjudicator errored ({exc}) — treating as new")
+        chosen = ""
+
+    if chosen:
+        print(f"[saas-pipeline] same-name merge (adjudicator) → {chosen}")
+        return chosen
+
+    # Step 4: adjudicator says "new" — suffix a counter.
+    existing_names = [c["contact"] for c in candidates]
+    new_name = _disambiguate_chat_name(proposed_name, existing_names)
+    print(f"[saas-pipeline] same-name new chat → {new_name}")
+    return new_name
+
+
 async def quick_capture_for_user(
     ctx: UserContext,
     img_bytes: bytes,
@@ -320,7 +437,17 @@ async def quick_capture_for_user(
     if not contact_name:
         contact_name = f"Chat {int(time.time())}"
 
-    # Step 2: persist to per-user chat store (Postgres-backed)
+    # Step 2: same-name disambiguation. If the user already has chats
+    # whose contact name matches the extracted one (e.g. two girls
+    # both named "Esther"), figure out whether this screenshot
+    # CONTINUES one of them or belongs to a brand-new chat. Without
+    # this, every "Esther" screenshot blindly merges into the first
+    # "Esther" chat in the database.
+    contact_name = await _resolve_chat_for_screenshot(
+        ctx.user_id, contact_name, new_msgs,
+    )
+
+    # Step 3: persist to per-user chat store (Postgres-backed)
     existing = db.chat_load(ctx.user_id, contact_name)
     existing_msgs = existing["messages"] if existing else []
     existing_meta = existing["meta"] if existing else {}
