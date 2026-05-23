@@ -98,6 +98,56 @@ def _sanitize_replies(replies: list[dict] | None) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
+# Platform-generated UI strings the OCR sometimes captures as if they
+# were chat messages. They contaminate downstream chat-matching (e.g.
+# "Start the chat with Jess" appears identically across every Hinge
+# match named Jess and tricks the same-name adjudicator into merging
+# distinct people). Match case-insensitively + tolerate the trailing
+# name variant where applicable.
+import re as _ui_re
+
+_UI_BOILERPLATE_PATTERNS: tuple[_ui_re.Pattern[str], ...] = (
+    # Hinge openers
+    _ui_re.compile(r"^start the chat with\b.*$", _ui_re.IGNORECASE),
+    _ui_re.compile(r"^you sent a like\b.*$", _ui_re.IGNORECASE),
+    _ui_re.compile(r"^new match\b.*$", _ui_re.IGNORECASE),
+    # Tinder / Bumble / generic
+    _ui_re.compile(r"^it'?s a match\b.*$", _ui_re.IGNORECASE),
+    _ui_re.compile(r"^you matched with\b.*$", _ui_re.IGNORECASE),
+    _ui_re.compile(r"^you sent a super ?like\b.*$", _ui_re.IGNORECASE),
+    _ui_re.compile(r"^your match expires\b.*$", _ui_re.IGNORECASE),
+    _ui_re.compile(r"^boost\s*$", _ui_re.IGNORECASE),
+    # Instagram / IG DMs
+    _ui_re.compile(r"^you replied to\b.*\bstory\b.*$", _ui_re.IGNORECASE),
+    _ui_re.compile(r"^you liked\b.*\bphoto\.?$", _ui_re.IGNORECASE),
+    _ui_re.compile(r"^liked a message$", _ui_re.IGNORECASE),
+    _ui_re.compile(r"^reacted .* to your message$", _ui_re.IGNORECASE),
+    # Read-receipt / status strings
+    _ui_re.compile(r"^(read|delivered|sent|seen|active now|online)\s*$", _ui_re.IGNORECASE),
+    _ui_re.compile(r"^last seen\b.*$", _ui_re.IGNORECASE),
+    # Date / day separators OCR sometimes captures as messages
+    _ui_re.compile(r"^(today|yesterday|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s*$", _ui_re.IGNORECASE),
+    _ui_re.compile(r"^[A-Z][a-z]{2},\s+[A-Z][a-z]{2,9}\s+\d{1,2}\s*$"),  # "Wed, May 13"
+    # Snapchat
+    _ui_re.compile(r"^you and .* are friends now$", _ui_re.IGNORECASE),
+    _ui_re.compile(r"^streak\b.*$", _ui_re.IGNORECASE),
+)
+
+
+def _is_ui_boilerplate(text: str) -> bool:
+    """True if ``text`` looks like a platform-generated UI string
+    rather than something a person typed. Used during OCR extraction
+    to drop these so they never end up persisted as 'messages' and
+    contaminate same-name chat matching downstream."""
+    t = (text or "").strip()
+    if not t:
+        return True
+    for pat in _UI_BOILERPLATE_PATTERNS:
+        if pat.match(t):
+            return True
+    return False
+
+
 async def _extract_chat_from_image(img_bytes: bytes) -> tuple[str, list[dict]]:
     """Run RAPID_FIRE_PROMPT against the image. Returns (contact_name,
     [{speaker, text}, ...]).
@@ -163,7 +213,7 @@ async def _extract_chat_from_image(img_bytes: bytes) -> tuple[str, list[dict]]:
                 for m in (data.get("messages") or []):
                     speaker = m.get("speaker", "")
                     text = (m.get("text") or "").strip()
-                    if speaker in ("me", "them") and text:
+                    if speaker in ("me", "them") and text and not _is_ui_boilerplate(text):
                         messages.append({"speaker": speaker, "text": text})
                 return True, (data.get("contact", "") or "").strip(), messages, ""
             except Exception as exc:
@@ -440,12 +490,28 @@ async def _resolve_chat_for_screenshot(
     # screenshot we trim its messages to the most recent few so the
     # adjudicator sees comparable conversational surface area, not a
     # giant vocabulary blob it's tempted to match against.
+    #
+    # We ALSO strip any UI boilerplate strings ("Start the chat with X",
+    # "You replied to their story", etc.) from both the screenshot
+    # messages and stored candidate tails before handing them to the
+    # adjudicator. Otherwise two unrelated Hinge/Tinder/Snap chats both
+    # containing the platform's identical "Start the chat with <name>"
+    # banner trick the adjudicator into reporting "exact same message
+    # → continuation" — which is exactly the bug we hit in production.
+    def _clean(msgs: list[dict]) -> list[dict]:
+        return [
+            m for m in msgs
+            if not _is_ui_boilerplate((m.get("text") or ""))
+        ]
+
+    new_msgs_clean = _clean(new_msgs)
+
     try:
         from wingman.match_adjudicator import adjudicate_match
 
         cand_pairs: list[tuple[str, list[dict]]] = []
         for c in candidates:
-            msgs = c["messages"]
+            msgs = _clean(c["messages"])
             # Trim to the last ~12 messages — enough context to capture
             # current rapport / topic without overwhelming the adjudicator
             # with a long history that biases toward "merge".
@@ -453,7 +519,7 @@ async def _resolve_chat_for_screenshot(
             cand_pairs.append((c["contact"], trimmed))
 
         chosen, reason = await adjudicate_match(
-            new_msgs, cand_pairs,
+            new_msgs_clean, cand_pairs,
             extracted_name=proposed_name,
             extracted_platform="",
         )
