@@ -321,30 +321,60 @@ def delete_chat_for_user(ctx: UserContext, chat_id: str) -> None:
 #      ("Esther" → "Esther 2") so both chats coexist cleanly.
 
 
+_OVERLAP_MIN_TEXT_LEN = 25      # reject "lol"/"yeah"/"😭"-tier matches
+_OVERLAP_REQUIRED_MATCHES = 2   # need 2 substantive messages overlapping
+
+
 def _has_message_overlap(
     new_msgs: list[dict],
     cand_msgs: list[dict],
     *,
-    tail_len: int = 5,
+    tail_len: int = 8,
 ) -> bool:
-    """Cheap exact-text overlap between a screenshot and a candidate
-    chat's recent tail. If any of the candidate's last ``tail_len``
-    messages appear verbatim in the screenshot's first 5 messages,
-    we treat it as a continuation and skip the Flash adjudicator.
+    """Strict exact-text overlap between a screenshot and a candidate
+    chat's recent tail.
+
+    Used as a "this is obviously the same conversation" short-circuit
+    so we can skip the Flash Lite adjudicator on the easy case.
+
+    Strict on purpose — false positives here = silently merging two
+    different people whose chats happened to share a casual filler
+    message ("lol", "yeah", "😂"). Constraints:
+
+      • Each candidate-tail message must be ≥ 25 chars to count.
+        Generic filler phrases below this threshold get ignored.
+      • At least ``_OVERLAP_REQUIRED_MATCHES`` distinct substantive
+        messages must overlap. One match is too easy to forge with
+        a shared opener like "hey x".
+      • Speaker side must match too — a "her: yeah" matching a
+        "him: yeah" doesn't count.
+
+    This raises the bar enough that almost all real same-name
+    collisions now go through the adjudicator (Flash Lite) where
+    they belong.
     """
     if not new_msgs or not cand_msgs:
         return False
-    cand_tail = {
+    cand_tail_keys = {
         (m.get("speaker"), (m.get("text") or "").strip())
         for m in cand_msgs[-tail_len:]
-        if (m.get("text") or "").strip()
+        if len((m.get("text") or "").strip()) >= _OVERLAP_MIN_TEXT_LEN
     }
-    if not cand_tail:
+    if len(cand_tail_keys) < _OVERLAP_REQUIRED_MATCHES:
+        # Candidate's tail is all filler; we can't trust an overlap
+        # claim either way — defer to the adjudicator.
         return False
-    for m in new_msgs[:5]:
-        key = (m.get("speaker"), (m.get("text") or "").strip())
-        if key in cand_tail:
-            return True
+
+    matched: set[tuple[str | None, str]] = set()
+    for m in new_msgs[:8]:
+        text = (m.get("text") or "").strip()
+        if len(text) < _OVERLAP_MIN_TEXT_LEN:
+            continue
+        key = (m.get("speaker"), text)
+        if key in cand_tail_keys:
+            matched.add(key)
+            if len(matched) >= _OVERLAP_REQUIRED_MATCHES:
+                return True
     return False
 
 
@@ -390,10 +420,27 @@ async def _resolve_chat_for_screenshot(
         print(f"[saas-pipeline] same-name merge (text-overlap) → {chosen}")
         return chosen
 
-    # Step 3: ask Flash Lite to adjudicate.
+    # Step 3: ask Flash Lite to adjudicate. The screenshot is short
+    # (typically 2-8 newly-extracted messages) and stored chats vary
+    # wildly in length (some 2 msgs, some 40+). Hard error mode: a
+    # 2-msg screenshot getting force-merged into a 40-msg "Jess" chat
+    # because Flash thinks the names + casual tone "fit". To guard
+    # against that, when ANY candidate is dramatically longer than the
+    # screenshot we trim its messages to the most recent few so the
+    # adjudicator sees comparable conversational surface area, not a
+    # giant vocabulary blob it's tempted to match against.
     try:
         from wingman.match_adjudicator import adjudicate_match
-        cand_pairs = [(c["contact"], c["messages"]) for c in candidates]
+
+        cand_pairs: list[tuple[str, list[dict]]] = []
+        for c in candidates:
+            msgs = c["messages"]
+            # Trim to the last ~12 messages — enough context to capture
+            # current rapport / topic without overwhelming the adjudicator
+            # with a long history that biases toward "merge".
+            trimmed = msgs[-12:] if len(msgs) > 12 else msgs
+            cand_pairs.append((c["contact"], trimmed))
+
         chosen, reason = await adjudicate_match(
             new_msgs, cand_pairs,
             extracted_name=proposed_name,
@@ -404,9 +451,10 @@ async def _resolve_chat_for_screenshot(
         # silently merge two different people.
         print(f"[saas-pipeline] adjudicator errored ({exc}) — treating as new")
         chosen = ""
+        reason = "adjudicator error"
 
     if chosen:
-        print(f"[saas-pipeline] same-name merge (adjudicator) → {chosen}")
+        print(f"[saas-pipeline] same-name merge (adjudicator) → {chosen}: {reason}")
         return chosen
 
     # Step 4: adjudicator says "new" — suffix a counter.

@@ -180,10 +180,15 @@ async def adjudicate_match(
     letter = verdict.strip().upper()[:1]
     if letter in label_to_contact:
         chosen = label_to_contact[letter]
-        # Low-confidence merges are risky (e.g. Flash is 50/50 on whether
-        # two Sienna are the same); refuse rather than guess wrong.
-        if confidence == "low":
-            return "", f"low-confidence ({reason}) — treating as new"
+        # Both "low" AND "medium" confidence merges are risky for the
+        # mobile use case where users frequently text multiple people
+        # with the same first name. Only merge on "high" — anything
+        # weaker, default to a new chat. Splitting a single person
+        # across two chat rows is recoverable; silently merging two
+        # different people is not (their replies degrade because the
+        # model thinks it's one ongoing thread).
+        if confidence in ("low", "medium"):
+            return "", f"{confidence}-confidence ({reason}) — treating as new"
         return chosen, f"{confidence or 'unrated'} confidence: {reason}"
 
     return "", f"hallucinated verdict {verdict!r} (candidates={list(label_to_contact)}): {reason}"
