@@ -349,8 +349,12 @@ async def quick_capture_for_user(
             img_bytes=img_bytes,
         )
     else:
+        # Quick mode now also receives the screenshot (when available)
+        # so Flash 3.5 can pick up read receipts / timestamps / profile
+        # vibe — visual cues OCR alone can't capture.
         replies, read, advice, model_tag, cost = await _generate_for_user_messages(
             ctx, conv.messages, extra_context=merged_context,
+            img_bytes=img_bytes,
         )
 
     # Step 4: scrub any model/training disclosures BEFORE persisting
@@ -641,6 +645,7 @@ async def _generate_for_user_messages(
     ctx: UserContext,
     messages: list[Message],
     extra_context: str = "",
+    img_bytes: bytes | None = None,
 ) -> tuple[list[dict], str, str, str, float]:
     """Quick mode dispatcher.
 
@@ -649,19 +654,29 @@ async def _generate_for_user_messages(
       - "tuned"             — fine-tuned Flash V2 on Vertex AI (legacy)
 
     Falls back to Pro on any failure so users always get something.
+
+    ``img_bytes`` is the original screenshot when available (quick-capture
+    flow). When set, the flash35 path attaches it as a multimodal input
+    so the model sees read receipts, timestamps, profile photo, online
+    status, etc. — visual context the OCR text alone can't capture.
+    Regenerate has no image, so it just runs text-only.
     """
     from wingman.config import QUICK_PATH
 
     if QUICK_PATH == "tuned":
+        # Tuned-V2 endpoint is text-only by design; the hedged tuned
+        # client doesn't take images. Skip img_bytes here.
         return await _generate_quick_via_tuned(ctx, messages, extra_context)
 
-    # Default path — Flash 3.5
+    # Default path — Flash 3.5 (multimodal)
     try:
-        return await _generate_quick_via_flash35(ctx, messages, extra_context)
+        return await _generate_quick_via_flash35(
+            ctx, messages, extra_context, img_bytes=img_bytes,
+        )
     except Exception as exc:
         print(f"[saas-pipeline] flash35 quick errored ({exc}) — falling back to pro")
         return await _generate_pro_for_user_messages(
-            ctx, messages, extra_context=extra_context,
+            ctx, messages, extra_context=extra_context, img_bytes=img_bytes,
         )
 
 
@@ -669,6 +684,7 @@ async def _generate_quick_via_flash35(
     ctx: UserContext,
     messages: list[Message],
     extra_context: str = "",
+    img_bytes: bytes | None = None,
 ) -> tuple[list[dict], str, str, str, float]:
     """Fast path using Gemini 3.5 Flash via AI Studio.
 
@@ -723,13 +739,35 @@ async def _generate_quick_via_flash35(
         "system_instruction": system_instruction,
         "temperature": 0.95,           # a bit higher than Pro's 0.9 — Flash
                                         # benefits from more creativity slack
-        "max_output_tokens": 4096,     # JSON output is small; tight cap saves tokens
+        # 8k leaves comfortable headroom for "thinking" + JSON output
+        # without hitting truncation. Earlier 4k cap occasionally
+        # truncated JSON mid-message and the dispatcher fell through
+        # to Pro for nothing.
+        "max_output_tokens": 8192,
         "response_mime_type": "application/json",
     }
     try:
         config_kwargs["safety_settings"] = permissive_safety_settings()
     except Exception:
         pass
+
+    # Build the multimodal payload. Text first, then optionally image
+    # + a short note pointing the model at it (mirrors Pro mode's
+    # contents shape so prompts feel consistent across modes).
+    contents: list = [user_prompt]
+    if img_bytes:
+        try:
+            image_part = gtypes.Part.from_bytes(
+                data=img_bytes, mime_type="image/jpeg",
+            )
+            contents.append(image_part)
+            contents.append(
+                "The screenshot above shows the actual chat. Use it for "
+                "visual context — read receipts, timestamps, online "
+                "status, profile photo vibe, anything text alone misses."
+            )
+        except Exception as exc:
+            print(f"[saas-pipeline] quick image-part build failed: {exc}")
 
     client = make_genai_client()
     raw = ""
@@ -740,10 +778,10 @@ async def _generate_quick_via_flash35(
                 asyncio.to_thread(
                     client.models.generate_content,
                     model=QUICK_MODEL,
-                    contents=[user_prompt],
+                    contents=contents,
                     config=gtypes.GenerateContentConfig(**config_kwargs),
                 ),
-                timeout=25,
+                timeout=30,
             )
             raw = (resp.text or "").strip()
             if raw:
