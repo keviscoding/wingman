@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import time
 import uuid
@@ -562,15 +563,24 @@ async def quick_capture_for_user(
     if not contact_name:
         contact_name = f"Chat {int(time.time())}"
 
-    # Step 2: same-name disambiguation. If the user already has chats
-    # whose contact name matches the extracted one (e.g. two girls
-    # both named "Esther"), figure out whether this screenshot
-    # CONTINUES one of them or belongs to a brand-new chat. Without
-    # this, every "Esther" screenshot blindly merges into the first
-    # "Esther" chat in the database.
-    contact_name = await _resolve_chat_for_screenshot(
-        ctx.user_id, contact_name, new_msgs,
-    )
+    # Step 2: same-name disambiguation (env-gated kill switch).
+    #
+    # When two users share a first name (e.g. two girls both named
+    # "Esther"), we'd ideally route each screenshot to the right chat
+    # via the Flash Lite adjudicator. In practice the adjudicator has
+    # been getting tricked by platform UI noise + tone overlap and
+    # producing high-confidence false-positive merges. Until we
+    # rebuild that flow with a more reliable signal (e.g. message
+    # embeddings or platform-specific cues), the feature is OFF.
+    #
+    # Set WINGMAN_SAMENAME_DISAMBIG=1 in env to re-enable. With it
+    # off, we fall back to the original behaviour: same name = same
+    # chat row. This is what mobile shipped with originally and is
+    # less surprising than wrong splits / wrong merges.
+    if os.getenv("WINGMAN_SAMENAME_DISAMBIG", "").strip() in ("1", "true", "yes"):
+        contact_name = await _resolve_chat_for_screenshot(
+            ctx.user_id, contact_name, new_msgs,
+        )
 
     # Step 3: persist to per-user chat store (Postgres-backed)
     existing = db.chat_load(ctx.user_id, contact_name)
