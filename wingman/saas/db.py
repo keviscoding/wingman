@@ -954,3 +954,120 @@ def chat_delete(user_id: str, contact_or_id: str) -> None:
             "DELETE FROM chats WHERE user_id = ? AND (id = ? OR id = ?)",
             (user_id, by_id, by_contact_id),
         )
+    # Best-effort: also nuke the fingerprint so a re-screenshot makes
+    # a clean start. If the file isn't there or can't be unlinked,
+    # that's fine — the chat row is gone either way.
+    try:
+        fp = chat_fingerprint_path(user_id, contact_or_id)
+        if fp.exists():
+            fp.unlink()
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Chat fingerprint images (visual same-name disambiguator)
+# ---------------------------------------------------------------------------
+# We save the FIRST screenshot of every new chat as a small JPEG
+# "fingerprint" so that a future screenshot extracted with the same
+# proposed name can be visually compared (faces / avatars / handles)
+# against existing chats. Two different girls named "Jess" have two
+# different faces — vision is the highest-signal disambiguator we can
+# get without phone-number / SSO confirmation.
+#
+# Storage: data/saas/chat_fingerprints/{user_id_safe}/{contact_safe}.jpg
+# (sits beside the SQLite file; survives container redeploys via the
+# DigitalOcean persistent volume mounted at /app/data).
+#
+# Size: max 720px on the long axis, JPEG quality 70 → ~30-50 KB per
+# chat. We don't overwrite — first screenshot is canonical, every
+# subsequent screenshot of the same chat just appends messages.
+
+FINGERPRINT_DIR = DB_PATH.parent / "chat_fingerprints"
+
+
+def _safe_user_dir(user_id: str) -> str:
+    """Filesystem-safe form of a user_id. user_ids are url-safe
+    base64-ish already (alnum + _ -), but we sanitize defensively."""
+    return "".join(c if c.isalnum() or c in "_-" else "_" for c in (user_id or "")) or "_"
+
+
+def _safe_contact_filename(contact: str) -> str:
+    """Mirror of the safe form used in _chat_id_for so the fingerprint
+    filename for "Jess" matches the stored chat row keyed under
+    "Jess"."""
+    return (
+        "".join(c if c.isalnum() or c in " _-" else "_" for c in (contact or ""))
+        .strip()
+        .lower()
+        or "chat"
+    )
+
+
+def chat_fingerprint_path(user_id: str, contact: str) -> Path:
+    """On-disk path for this chat's fingerprint image. May not exist
+    yet — caller should test with .exists()."""
+    return (
+        FINGERPRINT_DIR
+        / _safe_user_dir(user_id)
+        / f"{_safe_contact_filename(contact)}.jpg"
+    )
+
+
+def save_chat_fingerprint(user_id: str, contact: str, img_bytes: bytes) -> bool:
+    """Save a fingerprint image for this chat. Returns True if saved
+    (or already saved — idempotent), False on error.
+
+    We never overwrite an existing fingerprint — the first screenshot
+    of a chat is canonical. Subsequent screenshots may be cropped
+    differently, scrolled past the header, or even on a different
+    platform (e.g. moved to WhatsApp); using the first screenshot
+    keeps the visual reference stable.
+    """
+    path = chat_fingerprint_path(user_id, contact)
+    if path.exists():
+        return True
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Resize + recompress so we don't blow disk on full-resolution
+        # phone screenshots (typical 1170x2532 = ~500 KB raw JPEG;
+        # ~30-50 KB after this). Keeps reads fast at adjudicate time.
+        try:
+            from PIL import Image  # type: ignore
+            from io import BytesIO
+
+            img = Image.open(BytesIO(img_bytes))
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            max_dim = 720
+            longest = max(img.size)
+            if longest > max_dim:
+                ratio = max_dim / longest
+                new_size = (
+                    max(1, int(img.size[0] * ratio)),
+                    max(1, int(img.size[1] * ratio)),
+                )
+                img = img.resize(new_size, Image.LANCZOS)
+            img.save(path, "JPEG", quality=70, optimize=True)
+            return True
+        except Exception:
+            # PIL hiccup or corrupt input — fall back to saving the raw
+            # bytes verbatim so the visual adjudicator still has
+            # something to work with. Slightly larger on disk; fine.
+            path.write_bytes(img_bytes)
+            return True
+    except Exception:
+        return False
+
+
+def load_chat_fingerprint(user_id: str, contact: str) -> bytes | None:
+    """Read a fingerprint image. Returns None if no fingerprint has
+    been saved yet for this chat (legacy chat from before this
+    feature, or save failed silently)."""
+    path = chat_fingerprint_path(user_id, contact)
+    if not path.exists():
+        return None
+    try:
+        return path.read_bytes()
+    except Exception:
+        return None

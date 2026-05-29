@@ -351,6 +351,72 @@ def delete_chat_for_user(ctx: UserContext, chat_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Chat mode detection — Romance Mode trigger phrases in locked_context
+# ---------------------------------------------------------------------------
+# The user types a magic phrase anywhere in their per-chat locked_context
+# field and the system swaps in a different strategic persona overlay.
+# Tactical playbook stays; only the STRATEGIC INTENT shifts (slow burn,
+# build investment, dating-to-marry mindset).
+#
+# Two intensities supported:
+#   • strict_romance — full override, suppresses close-fast / cocky bias
+#   • soft_romance   — light bias toward patience without overriding
+#
+# See STRICT_ROMANCE_OVERLAY / SOFT_ROMANCE_OVERLAY in wingman.config
+# for the actual prompt content the model sees.
+
+_STRICT_ROMANCE_TRIGGERS: tuple[str, ...] = (
+    "romance mode",
+    "marriage mode",
+    "dating to marry",
+    "relationship mode",
+)
+_SOFT_ROMANCE_TRIGGERS: tuple[str, ...] = (
+    "slow burn",
+    "long game",
+    "play it cool",
+    "boil the frog",
+)
+
+
+def detect_chat_mode(locked_context: str) -> str:
+    """Map locked_context substring matches to a mode marker.
+
+    Returns one of: ``"strict_romance"``, ``"soft_romance"``, ``"default"``.
+
+    Substring match, case-insensitive — so a locked_context like
+    ``"romance mode — she's a vet, has a dog called Biscuit"`` correctly
+    activates strict_romance while keeping the rest of the user's
+    context (the vet/Biscuit detail) flowing into the prompt as-is.
+
+    Strict beats soft if both kinds of phrases are present (rare but
+    well-defined).
+    """
+    if not locked_context:
+        return "default"
+    t = locked_context.lower()
+    for phrase in _STRICT_ROMANCE_TRIGGERS:
+        if phrase in t:
+            return "strict_romance"
+    for phrase in _SOFT_ROMANCE_TRIGGERS:
+        if phrase in t:
+            return "soft_romance"
+    return "default"
+
+
+def _romance_overlay_for(mode: str) -> str:
+    """Return the system-instruction overlay text for the given chat
+    mode, or the empty string for ``default`` (no overlay)."""
+    if mode == "strict_romance":
+        from wingman.config import STRICT_ROMANCE_OVERLAY
+        return STRICT_ROMANCE_OVERLAY
+    if mode == "soft_romance":
+        from wingman.config import SOFT_ROMANCE_OVERLAY
+        return SOFT_ROMANCE_OVERLAY
+    return ""
+
+
+# ---------------------------------------------------------------------------
 # Chat routing — same-name disambiguation
 # ---------------------------------------------------------------------------
 # When a screenshot's extracted contact name collides with one or more
@@ -448,6 +514,7 @@ async def _resolve_chat_for_screenshot(
     user_id: str,
     proposed_name: str,
     new_msgs: list[dict],
+    img_bytes: bytes | None = None,
 ) -> str:
     """Pick the right chat for an incoming screenshot.
 
@@ -456,6 +523,15 @@ async def _resolve_chat_for_screenshot(
 
     Adjudicator failure is treated as "new" so we never silently merge
     two distinct people. Slightly more chats > silent data loss.
+
+    When ``img_bytes`` is supplied AND any candidate has a saved
+    fingerprint, we route through the multimodal visual adjudicator
+    (compares faces / avatars / handles directly). For dating apps
+    this is by far the strongest "same person?" signal — two
+    different girls named Jess can have identical greetings but they
+    cannot have the same face. Falls back to the text-only
+    adjudicator when no image bytes are available (e.g. regenerate)
+    or none of the candidates are fingerprinted yet.
     """
     # Step 1: gather same-base-name candidates.
     candidates = db.chats_with_same_base_name(user_id, proposed_name)
@@ -482,23 +558,9 @@ async def _resolve_chat_for_screenshot(
         print(f"[saas-pipeline] same-name merge (text-overlap) → {chosen}")
         return chosen
 
-    # Step 3: ask Flash Lite to adjudicate. The screenshot is short
-    # (typically 2-8 newly-extracted messages) and stored chats vary
-    # wildly in length (some 2 msgs, some 40+). Hard error mode: a
-    # 2-msg screenshot getting force-merged into a 40-msg "Jess" chat
-    # because Flash thinks the names + casual tone "fit". To guard
-    # against that, when ANY candidate is dramatically longer than the
-    # screenshot we trim its messages to the most recent few so the
-    # adjudicator sees comparable conversational surface area, not a
-    # giant vocabulary blob it's tempted to match against.
-    #
-    # We ALSO strip any UI boilerplate strings ("Start the chat with X",
-    # "You replied to their story", etc.) from both the screenshot
-    # messages and stored candidate tails before handing them to the
-    # adjudicator. Otherwise two unrelated Hinge/Tinder/Snap chats both
-    # containing the platform's identical "Start the chat with <name>"
-    # banner trick the adjudicator into reporting "exact same message
-    # → continuation" — which is exactly the bug we hit in production.
+    # Helper used by both adjudicator paths — strip UI boilerplate so
+    # platform-generated banners ("Start the chat with X" etc.) can't
+    # trick the adjudicator into reporting bogus content overlap.
     def _clean(msgs: list[dict]) -> list[dict]:
         return [
             m for m in msgs
@@ -507,18 +569,59 @@ async def _resolve_chat_for_screenshot(
 
     new_msgs_clean = _clean(new_msgs)
 
+    chosen = ""
+    reason = ""
+
+    # Step 3a: visual adjudicator (preferred). Only runs when we have
+    # the original screenshot bytes AND at least one candidate has a
+    # saved fingerprint. Sends the new screenshot + candidate
+    # fingerprints to a multimodal Gemini call that compares faces /
+    # avatars / handles directly.
+    visual_candidates: list[tuple[str, bytes | None, list[dict]]] = []
+    any_fingerprint = False
+    for c in candidates:
+        fp = db.load_chat_fingerprint(user_id, c["contact"])
+        if fp is not None:
+            any_fingerprint = True
+        msgs = _clean(c["messages"])
+        trimmed = msgs[-12:] if len(msgs) > 12 else msgs
+        visual_candidates.append((c["contact"], fp, trimmed))
+
+    if img_bytes and any_fingerprint:
+        try:
+            from wingman.saas.visual_adjudicator import visual_adjudicate_match
+            chosen, reason = await visual_adjudicate_match(
+                img_bytes, visual_candidates, extracted_name=proposed_name,
+            )
+        except Exception as exc:
+            print(f"[saas-pipeline] visual adjudicator errored ({exc}) — falling back to text")
+            chosen = ""
+            reason = ""
+        if chosen:
+            print(f"[saas-pipeline] same-name merge (visual) → {chosen}: {reason}")
+            return chosen
+        # If the visual adjudicator returned "" (= "new") with high
+        # signal, trust it — don't double-check via text. Visual is
+        # the stronger evidence, and re-asking via text is exactly
+        # what introduced the false-merge bugs we're solving.
+        if reason:
+            existing_names = [c["contact"] for c in candidates]
+            new_name = _disambiguate_chat_name(proposed_name, existing_names)
+            print(f"[saas-pipeline] same-name new chat (visual) → {new_name}: {reason}")
+            return new_name
+        # If we got here with no reason set, the visual call failed
+        # entirely (timeout / 404 / hallucinated verdict). Drop to
+        # text adjudicator as a backup.
+
+    # Step 3b: text-only adjudicator (legacy path). Used when:
+    #   • we have no image bytes (regenerate flow)
+    #   • zero candidates have fingerprints yet
+    #   • the visual call failed
     try:
         from wingman.match_adjudicator import adjudicate_match
-
-        cand_pairs: list[tuple[str, list[dict]]] = []
-        for c in candidates:
-            msgs = _clean(c["messages"])
-            # Trim to the last ~12 messages — enough context to capture
-            # current rapport / topic without overwhelming the adjudicator
-            # with a long history that biases toward "merge".
-            trimmed = msgs[-12:] if len(msgs) > 12 else msgs
-            cand_pairs.append((c["contact"], trimmed))
-
+        cand_pairs: list[tuple[str, list[dict]]] = [
+            (contact, msgs) for contact, _fp, msgs in visual_candidates
+        ]
         chosen, reason = await adjudicate_match(
             new_msgs_clean, cand_pairs,
             extracted_name=proposed_name,
@@ -527,18 +630,18 @@ async def _resolve_chat_for_screenshot(
     except Exception as exc:
         # If Flash is misbehaving, default to "new chat" so we never
         # silently merge two different people.
-        print(f"[saas-pipeline] adjudicator errored ({exc}) — treating as new")
+        print(f"[saas-pipeline] text adjudicator errored ({exc}) — treating as new")
         chosen = ""
         reason = "adjudicator error"
 
     if chosen:
-        print(f"[saas-pipeline] same-name merge (adjudicator) → {chosen}: {reason}")
+        print(f"[saas-pipeline] same-name merge (text) → {chosen}: {reason}")
         return chosen
 
     # Step 4: adjudicator says "new" — suffix a counter.
     existing_names = [c["contact"] for c in candidates]
     new_name = _disambiguate_chat_name(proposed_name, existing_names)
-    print(f"[saas-pipeline] same-name new chat → {new_name}")
+    print(f"[saas-pipeline] same-name new chat (text) → {new_name}")
     return new_name
 
 
@@ -563,23 +666,20 @@ async def quick_capture_for_user(
     if not contact_name:
         contact_name = f"Chat {int(time.time())}"
 
-    # Step 2: same-name disambiguation (env-gated kill switch).
+    # Step 2: same-name disambiguation (env-gated, default ON).
     #
-    # When two users share a first name (e.g. two girls both named
-    # "Esther"), we'd ideally route each screenshot to the right chat
-    # via the Flash Lite adjudicator. In practice the adjudicator has
-    # been getting tricked by platform UI noise + tone overlap and
-    # producing high-confidence false-positive merges. Until we
-    # rebuild that flow with a more reliable signal (e.g. message
-    # embeddings or platform-specific cues), the feature is OFF.
+    # Routes the screenshot to the right chat when multiple chats
+    # share the same first-name token. The visual adjudicator
+    # compares faces / avatars / handles directly — the highest
+    # signal we can get without a phone-number / SSO confirmation.
     #
-    # Set WINGMAN_SAMENAME_DISAMBIG=1 in env to re-enable. With it
-    # off, we fall back to the original behaviour: same name = same
-    # chat row. This is what mobile shipped with originally and is
-    # less surprising than wrong splits / wrong merges.
-    if os.getenv("WINGMAN_SAMENAME_DISAMBIG", "").strip() in ("1", "true", "yes"):
+    # Set WINGMAN_SAMENAME_DISAMBIG=0 in env to disable (kill switch
+    # for if a regression slips through). Defaults to ON now that
+    # the visual path is live.
+    disambig_flag = os.getenv("WINGMAN_SAMENAME_DISAMBIG", "1").strip().lower()
+    if disambig_flag not in ("0", "false", "no", "off"):
         contact_name = await _resolve_chat_for_screenshot(
-            ctx.user_id, contact_name, new_msgs,
+            ctx.user_id, contact_name, new_msgs, img_bytes=img_bytes,
         )
 
     # Step 3: persist to per-user chat store (Postgres-backed)
@@ -594,6 +694,25 @@ async def quick_capture_for_user(
             appended.append(m)
             have.add(key)
     db.chat_save(ctx.user_id, contact_name, appended, existing_meta)
+
+    # Step 3b: save the fingerprint image for this chat. Idempotent —
+    # only the FIRST screenshot of each chat is kept (subsequent
+    # screenshots may be cropped differently, scrolled past the header,
+    # or moved to a different platform; first one is canonical).
+    # Includes lazy-backfill for chats that existed before this
+    # feature shipped.
+    try:
+        if img_bytes:
+            saved = db.save_chat_fingerprint(ctx.user_id, contact_name, img_bytes)
+            if saved and not db.chat_fingerprint_path(
+                ctx.user_id, contact_name
+            ).exists():
+                # Defensive — should never happen but log if it does.
+                print(
+                    f"[saas-pipeline] fingerprint save reported success but file missing for {contact_name!r}"
+                )
+    except Exception as exc:
+        print(f"[saas-pipeline] fingerprint save failed ({contact_name!r}): {exc}")
 
     # Merge any locked context the user previously pinned to this chat.
     # Locked context lives in chat meta and persists across screenshots /
@@ -752,17 +871,32 @@ async def _generate_pro_for_user_messages(
     if not playbook:
         print("[saas-pipeline] WARNING: playbook empty — Pro replies will be vanilla")
 
+    # Detect Romance Mode trigger phrases in extra_context (which by
+    # this point includes any locked_context the user pinned to the
+    # chat — the dispatcher's _merge_locked_context concatenated them).
+    chat_mode = detect_chat_mode(extra_context)
+    overlay = _romance_overlay_for(chat_mode)
+    if overlay:
+        print(f"[saas-pipeline] pro chat_mode={chat_mode}")
+
     def build_system_instruction(safe: bool) -> str:
         """Match desktop's Pro structure: rules portion of the system
-        prompt + Master Playbook in the system_instruction. The
-        transcript itself goes in the user prompt below.
+        prompt + (optional) Romance Mode overlay + Master Playbook in
+        the system_instruction. The transcript itself goes in the user
+        prompt below.
 
-        REPLY_SYSTEM_PROMPT contains both rules + a `Conversation:
-        {transcript}` placeholder; we strip the placeholder portion
-        out so only the rules end up here."""
+        Romance Mode overlay sits BETWEEN the rules and the playbook —
+        rules first (identity / brand-edge / output schema), then the
+        strategic re-tune, then the tactical playbook. Reading order
+        matters: the model treats latest content as most-relevant, so
+        the playbook (which it weighs heavily on tactics) follows the
+        overlay rather than precedes it.
+        """
         base = REPLY_SYSTEM_PROMPT_SAFE if safe else REPLY_SYSTEM_PROMPT
         rules_only = base.split("Conversation:\n{transcript}")[0].rstrip()
         parts = [rules_only]
+        if overlay:
+            parts.append(overlay)
         if playbook:
             parts.append(playbook)
         return "\n\n".join(parts)
@@ -986,13 +1120,24 @@ async def _generate_quick_via_flash35(
     except Exception as exc:
         print(f"[saas-pipeline] playbook load failed (quick): {exc}")
 
+    # Detect Romance Mode trigger phrases in extra_context (locked_context
+    # is already merged in by the dispatcher). Same overlay logic as
+    # Pro mode — the strategic re-tune is model-agnostic.
+    chat_mode = detect_chat_mode(extra_context)
+    overlay = _romance_overlay_for(chat_mode)
+    if overlay:
+        print(f"[saas-pipeline] quick chat_mode={chat_mode}")
+
     def build_system_instruction(safe: bool) -> str:
         """Strip the trailing 'Conversation: {transcript}' placeholder
         from the prompt template (we put the transcript in the user
-        turn instead) and concat the Master Playbook."""
+        turn instead), then concat: rules → Romance overlay (if any)
+        → Master Playbook. Order mirrors the Pro path."""
         base = REPLY_SYSTEM_PROMPT_SAFE if safe else REPLY_SYSTEM_PROMPT
         rules_only = base.split("Conversation:\n{transcript}")[0].rstrip()
         parts = [rules_only]
+        if overlay:
+            parts.append(overlay)
         if playbook:
             parts.append(playbook)
         return "\n\n".join(parts)

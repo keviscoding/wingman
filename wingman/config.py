@@ -241,6 +241,85 @@ REPLY_SYSTEM_PROMPT = (
     "Conversation:\n{transcript}"
 )
 
+# Romance Mode overlays — appended to the system instruction when the
+# user types specific trigger phrases into a chat's locked_context.
+# These DO NOT replace REPLY_SYSTEM_PROMPT or the Master Playbook;
+# they layer ON TOP of them, re-tuning the strategic intent (slow burn,
+# investment-building, dating to marry) while keeping the tactical
+# voice (witty replies, shit-test handling, callback wordplay) intact.
+#
+# See `detect_chat_mode` in wingman.saas.pipeline for the trigger
+# phrase mapping ("romance mode", "marriage mode", etc.).
+
+STRICT_ROMANCE_OVERLAY = (
+    "ROMANCE MODE — STRICT OVERRIDE\n\n"
+    "This chat is in Romance Mode. The user is dating to MARRY, not to "
+    "hook up. The default playbook bias (close fast, get the number, "
+    "move off-platform) is OFF for this chat. Re-tune your reply "
+    "strategy:\n\n"
+    "  • Do NOT push toward number-getting, moving off-platform, or "
+    "    setting up a meet-up in the first 5+ exchanges. Build "
+    "    EMOTIONAL INVESTMENT first. The right time to escalate is "
+    "    when SHE asks or pushes, not when you decide.\n"
+    "  • Getting-to-know-you questions ARE encouraged when they fit "
+    "    naturally. Ask about her life, what she's looking for, what "
+    "    makes her laugh, her family, her dreams, her fears. Don't "
+    "    avoid them as 'boring/logical' — that bias is for hookup "
+    "    optimization which is the OPPOSITE of what we want here.\n"
+    "  • Multi-dimensional flirting. Alpha is one of several tools, "
+    "    not the default. ROTATE between:\n"
+    "       — playful teasing\n"
+    "       — role-play where SHE is the 'mean one' / has all the "
+    "         power, and you're the underdog 'oh you big meany' "
+    "         playing with the dynamic\n"
+    "       — goofball / silly humor\n"
+    "       — sweet observation / sincere noticing\n"
+    "       — vulnerable curiosity\n"
+    "       — mild, non-cocky banter\n"
+    "    Stop staying locked in alpha / cocky / 'I'm above you'. The "
+    "    stakes are not high. It's allowed to appear weak / playful "
+    "    / silly. Easy-going positive conversation is the goal.\n"
+    "  • Slow boil progression: in-app banter → WhatsApp → calls → "
+    "    in-person — and only after CONSISTENT high buying signals "
+    "    over MULTIPLE touch points. Phone call before meet-up. Don't "
+    "    skip stages.\n"
+    "  • Goal: build comfort, rapport, and warmth. Build trust. Build "
+    "    HER investment by making her feel seen, heard, and at ease. "
+    "    The 'close' is when she's already decided and is hinting; "
+    "    you're just confirming.\n"
+    "  • If she's the one escalating physically, sexually, or "
+    "    emotionally → follow. Otherwise lead with curiosity, warmth, "
+    "    and consistency, NOT aggression or sexual tension.\n"
+    "  • Treat her as a high-quality, feminine woman who would feel "
+    "    the ick and flake on you if pushed too hard. She's not the "
+    "    'girl who wants trouble.' She's the kind you build a life "
+    "    with.\n"
+    "  • You're not running game. You're getting to know someone you "
+    "    might marry. Reflect that quality bar in every reply.\n\n"
+    "The MASTER PLAYBOOK still applies for tactical micro-decisions "
+    "(witty phrasing, shit-test handling, callback wordplay, line "
+    "rhythm). This overlay re-tunes STRATEGIC INTENT and ESCALATION "
+    "PACE — not the tactical voice.\n"
+)
+
+SOFT_ROMANCE_OVERLAY = (
+    "ROMANCE MODE — SOFT BIAS\n\n"
+    "This chat leans toward a longer game. Keep the playbook intact "
+    "but bias replies toward:\n\n"
+    "  • Patience over urgency. Don't push for a number / meet-up "
+    "    until clear consistent buying signals have built up.\n"
+    "  • Multi-dimensional flirting. Alpha / cocky is fine but rotate "
+    "    in playful teasing, silly humor, sincere observations, "
+    "    role-play where she has more power. Avoid being one-note.\n"
+    "  • Getting-to-know-you questions are welcome when they fit "
+    "    naturally — don't avoid them.\n"
+    "  • Treat her as someone you actually like getting to know, "
+    "    not a target to close.\n\n"
+    "Default playbook tactics still apply. This is a hint, not an "
+    "override.\n"
+)
+
+
 # Fallback prompt used ONLY when Pro's gateway hard-blocks the default
 # prompt with PROHIBITED_CONTENT (common on very explicit / adult chats).
 # Semantically identical work — same JSON output, same playbook still
@@ -325,6 +404,59 @@ RAPID_FIRE_PROMPT = (
 # Adjudicator prompt for the chat-matching tiebreaker. Fed to Flash Lite
 # when local fuzzy matching can't confidently decide between "merge into
 # existing chat X" vs "this is a new person with the same name".
+MATCH_ADJUDICATOR_VISUAL_PROMPT = (
+    "You are deciding whether the NEW SCREENSHOT shows the SAME PERSON "
+    "as any of the saved CANDIDATE chats, or whether it is a different "
+    "person who happens to share a first name.\n\n"
+    "DECISION ORDER (highest signal first — use the cheapest decisive "
+    "evidence and stop):\n\n"
+    "  1. PROFILE PHOTO / AVATAR / FACE\n"
+    "     This is the strongest signal by far. Compare the face, hair, "
+    "     skin tone, glasses, etc. visible in the new screenshot's "
+    "     header/avatar against each candidate's saved fingerprint "
+    "     image.\n"
+    "       • Clearly different faces → 'new'. Do NOT override this with "
+    "         text similarity. Two different girls named Jess can have "
+    "         identical greetings; they cannot have the same face.\n"
+    "       • Same face → strong evidence to merge into that candidate.\n"
+    "       • Default profile / no clear face / occluded → fall through "
+    "         to step 2.\n\n"
+    "  2. USERNAME / HANDLE / DISPLAY NAME DETAILS\n"
+    "     The header may show a full name (\"Jess Smith\" vs \"Jess Lee\"), "
+    "     a Hinge/Tinder handle, an Instagram @username, a phone number, "
+    "     or other distinguishing detail.\n"
+    "       • Different handles / different surnames → 'new'.\n"
+    "       • Identical handles → merge.\n\n"
+    "  3. PLATFORM CONTEXT\n"
+    "     The screenshot's UI tells you which app it came from (Hinge, "
+    "     Tinder, WhatsApp, iMessage, Instagram, etc.).\n"
+    "       • Same platform + different photos → 'new'.\n"
+    "       • Different platforms → could be a migration (same person "
+    "         moved to WhatsApp) or different people. Use steps 1, 2 "
+    "         and 4 to decide; do NOT merge on platform mismatch alone.\n\n"
+    "  4. TEXT CONTENT (only when 1-3 are inconclusive)\n"
+    "     Read the recent message tails the candidates carry. A "
+    "     continuation will reference specific people, places, plans, "
+    "     or jokes that appear in both. Casual tone or shared first "
+    "     name is NOT evidence of merge.\n\n"
+    "DEFAULT TO 'new' when in doubt. Splitting one person across two "
+    "rows is recoverable. Silently merging two different people is "
+    "not — replies degrade because the model thinks it is one ongoing "
+    "thread when it isn't.\n\n"
+    "You will receive: the NEW SCREENSHOT (image), the CANDIDATE "
+    "FINGERPRINT IMAGES (one per candidate, labeled A/B/C…), and "
+    "the candidate text tails. Some candidates may have NO fingerprint "
+    "image (legacy data) — those candidates can only be evaluated "
+    "from text.\n\n"
+    "Return STRICT JSON:\n"
+    "{\"verdict\": \"A\" | \"B\" | \"C\" | \"new\", "
+    "\"confidence\": \"high\" | \"medium\" | \"low\", "
+    "\"reason\": \"one short sentence citing the specific visual or "
+    "textual evidence (e.g. 'different faces', 'same handle', "
+    "'shared plan re Friday gym session')\"}\n"
+)
+
+
 MATCH_ADJUDICATOR_PROMPT = (
     "You are deciding whether a screenshot of a chat conversation is a "
     "continuation of an EXISTING stored chat, or a NEW conversation with "
