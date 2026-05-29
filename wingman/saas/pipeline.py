@@ -417,232 +417,180 @@ def _romance_overlay_for(mode: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Chat routing — same-name disambiguation
+# Chat routing — 3-tier disambiguation (ported from desktop)
 # ---------------------------------------------------------------------------
-# When a screenshot's extracted contact name collides with one or more
-# existing chats (e.g. two girls both named "Esther"), we can't blindly
-# merge into whichever chat row was created first. We need to figure
-# out whether the screenshot is a CONTINUATION of an existing thread
-# or a NEW chat for a different person with the same first name.
+# The desktop hotkey path solved this years ago with a structured local
+# fuzzy matcher (`thefuzz` Levenshtein) plus distinctiveness gates plus
+# a 3-tier decision system. The mobile/SaaS pipeline shipped without
+# this brain and has been getting tricked by shared casual tone and
+# identical platform UI banners.
 #
-# Decision tree:
-#   1. No candidates with the same base name → save under proposed name
-#   2. Exactly 1 candidate AND clear text overlap between screenshot
-#      and the candidate's recent tail → it's a continuation, no Flash
-#      call needed (saves money + latency in the common case)
-#   3. Otherwise → call the Flash Lite adjudicator. It reads the
-#      candidates' recent messages alongside the screenshot and votes
-#      "merge into A/B/C" or "new". This is the same module the
-#      desktop hotkey uses, ported over for mobile.
-#   4. If the adjudicator says "new", suffix a number to the name
-#      ("Esther" → "Esther 2") so both chats coexist cleanly.
-
-
-_OVERLAP_MIN_TEXT_LEN = 25      # reject "lol"/"yeah"/"😭"-tier matches
-_OVERLAP_REQUIRED_MATCHES = 2   # need 2 substantive messages overlapping
-
-
-def _has_message_overlap(
-    new_msgs: list[dict],
-    cand_msgs: list[dict],
-    *,
-    tail_len: int = 8,
-) -> bool:
-    """Strict exact-text overlap between a screenshot and a candidate
-    chat's recent tail.
-
-    Used as a "this is obviously the same conversation" short-circuit
-    so we can skip the Flash Lite adjudicator on the easy case.
-
-    Strict on purpose — false positives here = silently merging two
-    different people whose chats happened to share a casual filler
-    message ("lol", "yeah", "😂"). Constraints:
-
-      • Each candidate-tail message must be ≥ 25 chars to count.
-        Generic filler phrases below this threshold get ignored.
-      • At least ``_OVERLAP_REQUIRED_MATCHES`` distinct substantive
-        messages must overlap. One match is too easy to forge with
-        a shared opener like "hey x".
-      • Speaker side must match too — a "her: yeah" matching a
-        "him: yeah" doesn't count.
-
-    This raises the bar enough that almost all real same-name
-    collisions now go through the adjudicator (Flash Lite) where
-    they belong.
-    """
-    if not new_msgs or not cand_msgs:
-        return False
-    cand_tail_keys = {
-        (m.get("speaker"), (m.get("text") or "").strip())
-        for m in cand_msgs[-tail_len:]
-        if len((m.get("text") or "").strip()) >= _OVERLAP_MIN_TEXT_LEN
-    }
-    if len(cand_tail_keys) < _OVERLAP_REQUIRED_MATCHES:
-        # Candidate's tail is all filler; we can't trust an overlap
-        # claim either way — defer to the adjudicator.
-        return False
-
-    matched: set[tuple[str | None, str]] = set()
-    for m in new_msgs[:8]:
-        text = (m.get("text") or "").strip()
-        if len(text) < _OVERLAP_MIN_TEXT_LEN:
-            continue
-        key = (m.get("speaker"), text)
-        if key in cand_tail_keys:
-            matched.add(key)
-            if len(matched) >= _OVERLAP_REQUIRED_MATCHES:
-                return True
-    return False
-
-
-def _disambiguate_chat_name(proposed: str, existing_names: list[str]) -> str:
-    """Return a contact name that doesn't collide with anything in
-    ``existing_names``. If the proposed name is free, return as-is;
-    otherwise append a counter ("Esther", "Esther 2", "Esther 3"…).
-    """
-    proposed = (proposed or "").strip() or "Chat"
-    existing_lower = {n.strip().lower() for n in existing_names if n}
-    if proposed.lower() not in existing_lower:
-        return proposed
-    n = 2
-    while f"{proposed} {n}".lower() in existing_lower:
-        n += 1
-    return f"{proposed} {n}"
+# This routing function uses `wingman.chat_matcher` (the lifted-out
+# desktop matcher) to make decisions in three tiers:
+#
+#   Tier 1 — STRONG LOCAL MATCH (no Flash call, deterministic merge):
+#     The screenshot scores highly against an existing chat AND the
+#     alignment is tail-anchored AND content is distinctive (≥60 chars
+#     of aligned real text). Skip the adjudicator and merge.
+#
+#   Tier 2 — BORDERLINE OR NAME COLLISION (Flash Lite adjudicates):
+#     A name like the screenshot's exists already, OR the local matcher
+#     found a winner that's not strong enough. Send up to 3 candidates
+#     to the Flash Lite text adjudicator. Only "high" confidence
+#     merges go through; medium/low → new chat.
+#
+#   Tier 3 — BARE NEW (no Flash call):
+#     Fresh name, no fuzzy match anywhere. Just disambiguate the name
+#     against existing slots (empty-row reuse if available).
 
 
 async def _resolve_chat_for_screenshot(
     user_id: str,
     proposed_name: str,
     new_msgs: list[dict],
-    img_bytes: bytes | None = None,
 ) -> str:
     """Pick the right chat for an incoming screenshot.
 
     Returns the contact_name the caller should save under — either an
     existing one (continuation) or a freshly-disambiguated new name.
 
+    Decision tree (mirrors desktop's hotkey pipeline):
+
+      1. Run the local fuzzy matcher across ALL of this user's chats.
+         If we get a strong match (composite score ≥ 70, k ≥ 3 aligned
+         messages, tail-anchored, ≥ 60 chars of substantive content)
+         → merge immediately, no Flash call.
+
+      2. If a same-base-name chat exists OR the local matcher found a
+         borderline winner → call the Flash Lite text adjudicator with
+         up to 3 candidates. Only high-confidence merges go through;
+         medium/low downgrade to "new".
+
+      3. Otherwise (totally new name + no fuzzy match anywhere) →
+         disambiguate the name against existing slots and return.
+
     Adjudicator failure is treated as "new" so we never silently merge
-    two distinct people. Slightly more chats > silent data loss.
-
-    When ``img_bytes`` is supplied AND any candidate has a saved
-    fingerprint, we route through the multimodal visual adjudicator
-    (compares faces / avatars / handles directly). For dating apps
-    this is by far the strongest "same person?" signal — two
-    different girls named Jess can have identical greetings but they
-    cannot have the same face. Falls back to the text-only
-    adjudicator when no image bytes are available (e.g. regenerate)
-    or none of the candidates are fingerprinted yet.
+    two distinct people. Splitting one person across two rows is
+    recoverable; silent merging is not.
     """
-    # Step 1: gather same-base-name candidates.
-    candidates = db.chats_with_same_base_name(user_id, proposed_name)
-    candidates = [c for c in candidates if c.get("messages")]
+    from wingman import chat_matcher
 
-    # Always log so we can audit disambiguator behavior in production
-    # (lets us tell, from runtime logs, whether the path is even firing
-    # for a given screenshot — separate from whether it routed correctly).
-    cand_summary = ", ".join(
-        f"{c['contact']}({len(c['messages'])}msg)" for c in candidates
-    ) or "(none)"
-    print(
-        f"[saas-pipeline] disambiguate proposed={proposed_name!r} "
-        f"candidates=[{cand_summary}]"
+    # Load every chat the user owns — already includes message arrays
+    # (chat_list returns the full message_json blob per row).
+    all_chats = db.chat_list(user_id)
+    chats_with_msgs = [c for c in all_chats if c.get("messages")]
+
+    # Strip UI boilerplate from the screenshot before any matching so
+    # Hinge/Tinder/IG banners ("Start the chat with X", "You replied
+    # to their story", date headers, etc.) don't pollute the score.
+    new_msgs_clean = [
+        m for m in new_msgs
+        if not _is_ui_boilerplate(m.get("text", ""))
+    ]
+
+    # ─── Tier 1 — strong local match anywhere → fast merge ───
+    tx_match, tx_score = chat_matcher.match_by_transcript_overlap(
+        new_msgs_clean, chats_with_msgs,
+    )
+    if tx_match:
+        try:
+            from thefuzz import fuzz as _fz
+        except Exception:
+            _fz = None
+        saved = next(
+            (c for c in chats_with_msgs if c["contact"] == tx_match),
+            None,
+        )
+        if saved is not None and _fz is not None:
+            screen_texts = chat_matcher.msg_texts(
+                new_msgs_clean, chat_matcher.SCREENSHOT_TAIL,
+            )
+            saved_texts = chat_matcher.msg_texts(
+                saved["messages"], chat_matcher.SAVED_TAIL,
+            )
+            if chat_matcher.is_strong_local_match(
+                screen_texts, saved_texts, _fz, tx_score,
+            ):
+                print(
+                    f"[saas-pipeline] tier1 fast_merge → {tx_match!r} "
+                    f"(score={tx_score})"
+                )
+                return tx_match
+
+    # ─── Tier 2 — name collision OR borderline tx_match → adjudicate ───
+    saved_names = [c.get("contact") or "" for c in all_chats]
+    name_collision = (
+        bool(proposed_name)
+        and chat_matcher.name_collides(proposed_name, saved_names)
     )
 
-    if not candidates:
-        return proposed_name
-
-    # Step 2: exactly one candidate AND obvious text continuation
-    # (last few stored messages re-appear in the screenshot) → merge.
-    if len(candidates) == 1 and _has_message_overlap(new_msgs, candidates[0]["messages"]):
-        chosen = candidates[0]["contact"]
-        print(f"[saas-pipeline] same-name merge (text-overlap) → {chosen}")
-        return chosen
-
-    # Helper used by both adjudicator paths — strip UI boilerplate so
-    # platform-generated banners ("Start the chat with X" etc.) can't
-    # trick the adjudicator into reporting bogus content overlap.
-    def _clean(msgs: list[dict]) -> list[dict]:
-        return [
-            m for m in msgs
-            if not _is_ui_boilerplate((m.get("text") or ""))
-        ]
-
-    new_msgs_clean = _clean(new_msgs)
-
-    chosen = ""
-    reason = ""
-
-    # Step 3a: visual adjudicator (preferred). Only runs when we have
-    # the original screenshot bytes AND at least one candidate has a
-    # saved fingerprint. Sends the new screenshot + candidate
-    # fingerprints to a multimodal Gemini call that compares faces /
-    # avatars / handles directly.
-    visual_candidates: list[tuple[str, bytes | None, list[dict]]] = []
-    any_fingerprint = False
-    for c in candidates:
-        fp = db.load_chat_fingerprint(user_id, c["contact"])
-        if fp is not None:
-            any_fingerprint = True
-        msgs = _clean(c["messages"])
-        trimmed = msgs[-12:] if len(msgs) > 12 else msgs
-        visual_candidates.append((c["contact"], fp, trimmed))
-
-    if img_bytes and any_fingerprint:
-        try:
-            from wingman.saas.visual_adjudicator import visual_adjudicate_match
-            chosen, reason = await visual_adjudicate_match(
-                img_bytes, visual_candidates, extracted_name=proposed_name,
-            )
-        except Exception as exc:
-            print(f"[saas-pipeline] visual adjudicator errored ({exc}) — falling back to text")
-            chosen = ""
-            reason = ""
-        if chosen:
-            print(f"[saas-pipeline] same-name merge (visual) → {chosen}: {reason}")
-            return chosen
-        # If the visual adjudicator returned "" (= "new") with high
-        # signal, trust it — don't double-check via text. Visual is
-        # the stronger evidence, and re-asking via text is exactly
-        # what introduced the false-merge bugs we're solving.
-        if reason:
-            existing_names = [c["contact"] for c in candidates]
-            new_name = _disambiguate_chat_name(proposed_name, existing_names)
-            print(f"[saas-pipeline] same-name new chat (visual) → {new_name}: {reason}")
-            return new_name
-        # If we got here with no reason set, the visual call failed
-        # entirely (timeout / 404 / hallucinated verdict). Drop to
-        # text adjudicator as a backup.
-
-    # Step 3b: text-only adjudicator (legacy path). Used when:
-    #   • we have no image bytes (regenerate flow)
-    #   • zero candidates have fingerprints yet
-    #   • the visual call failed
-    try:
-        from wingman.match_adjudicator import adjudicate_match
-        cand_pairs: list[tuple[str, list[dict]]] = [
-            (contact, msgs) for contact, _fp, msgs in visual_candidates
-        ]
-        chosen, reason = await adjudicate_match(
-            new_msgs_clean, cand_pairs,
-            extracted_name=proposed_name,
-            extracted_platform="",
+    if proposed_name and (tx_match or name_collision):
+        candidates = chat_matcher.gather_candidates(
+            proposed_name, tx_match, tx_score, chats_with_msgs,
+            max_candidates=3,
         )
-    except Exception as exc:
-        # If Flash is misbehaving, default to "new chat" so we never
-        # silently merge two different people.
-        print(f"[saas-pipeline] text adjudicator errored ({exc}) — treating as new")
-        chosen = ""
-        reason = "adjudicator error"
+        cand_summary = ", ".join(
+            f"{c}({len(m)}msg)" for c, m in candidates
+        ) or "(none)"
+        print(
+            f"[saas-pipeline] tier2 enter proposed={proposed_name!r} "
+            f"tx_match={tx_match!r} tx_score={tx_score} "
+            f"candidates=[{cand_summary}]"
+        )
 
-    if chosen:
-        print(f"[saas-pipeline] same-name merge (text) → {chosen}: {reason}")
-        return chosen
+        if candidates:
+            try:
+                from wingman.match_adjudicator import adjudicate_match
+                chosen, reason = await adjudicate_match(
+                    new_msgs_clean, candidates,
+                    extracted_name=proposed_name,
+                    extracted_platform="",
+                )
+            except Exception as exc:
+                print(f"[saas-pipeline] tier2 adjudicator errored ({exc}) → new")
+                chosen, reason = "", "adjudicator error"
 
-    # Step 4: adjudicator says "new" — suffix a counter.
-    existing_names = [c["contact"] for c in candidates]
-    new_name = _disambiguate_chat_name(proposed_name, existing_names)
-    print(f"[saas-pipeline] same-name new chat (text) → {new_name}")
-    return new_name
+            if chosen:
+                print(f"[saas-pipeline] tier2 merge → {chosen!r}: {reason}")
+                return chosen
+
+            new_name = chat_matcher.disambiguate_name(proposed_name, all_chats)
+            print(
+                f"[saas-pipeline] tier2 new chat → {new_name!r} "
+                f"(reason={reason})"
+            )
+            return new_name
+
+        # Name collision but every candidate was empty (orphan rows).
+        # Fall through to disambiguate against ALL chats (not just the
+        # filtered-by-messages list) so we don't accidentally hand back
+        # a bare name that points at an empty placeholder elsewhere.
+        new_name = chat_matcher.disambiguate_name(proposed_name, all_chats)
+        print(
+            f"[saas-pipeline] tier2 no-candidates → {new_name!r} "
+            f"(name collision but no chats with messages)"
+        )
+        return new_name
+
+    # ─── Tier 3 — brand new name, no fuzzy anywhere ───
+    if proposed_name:
+        new_name = chat_matcher.disambiguate_name(proposed_name, all_chats)
+        print(
+            f"[saas-pipeline] tier3 bare_new → {new_name!r} "
+            f"(tx_score={tx_score})"
+        )
+        return new_name
+
+    # No name extracted but local matcher found something — trust it.
+    if tx_match:
+        print(
+            f"[saas-pipeline] no-name fast_merge → {tx_match!r} "
+            f"(score={tx_score})"
+        )
+        return tx_match
+
+    # Total cold start: no name, no fuzzy match. Use a placeholder.
+    return f"Chat {int(time.time())}"
 
 
 async def quick_capture_for_user(
@@ -666,20 +614,23 @@ async def quick_capture_for_user(
     if not contact_name:
         contact_name = f"Chat {int(time.time())}"
 
-    # Step 2: same-name disambiguation (env-gated, default ON).
+    # Step 2: route the screenshot to the right chat (env-gated, default ON).
     #
-    # Routes the screenshot to the right chat when multiple chats
-    # share the same first-name token. The visual adjudicator
-    # compares faces / avatars / handles directly — the highest
-    # signal we can get without a phone-number / SSO confirmation.
+    # Uses the desktop's local fuzzy matcher (lifted into
+    # wingman.chat_matcher) plus the Flash Lite text adjudicator on
+    # ambiguous cases. 3-tier decision tree:
     #
-    # Set WINGMAN_SAMENAME_DISAMBIG=0 in env to disable (kill switch
-    # for if a regression slips through). Defaults to ON now that
-    # the visual path is live.
+    #   Tier 1 — strong local match (deterministic merge, no Flash)
+    #   Tier 2 — name collision or borderline match (Flash Lite tiebreaks)
+    #   Tier 3 — bare new (no fuzzy anywhere; just pick a free name slot)
+    #
+    # Set WINGMAN_SAMENAME_DISAMBIG=0 in env to disable entirely
+    # (falls back to "same name = same chat row" behavior). Default
+    # is ON now that the local matcher is in place.
     disambig_flag = os.getenv("WINGMAN_SAMENAME_DISAMBIG", "1").strip().lower()
     if disambig_flag not in ("0", "false", "no", "off"):
         contact_name = await _resolve_chat_for_screenshot(
-            ctx.user_id, contact_name, new_msgs, img_bytes=img_bytes,
+            ctx.user_id, contact_name, new_msgs,
         )
 
     # Step 3: persist to per-user chat store (Postgres-backed)
