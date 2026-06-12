@@ -578,6 +578,12 @@ async def set_locked_context(
     Sending ``enabled=False`` disables the lock without deleting the
     text — toggle in/out without re-typing.
     Sending ``locked_context=""`` clears it entirely.
+
+    Also reconciles the user's account-wide Combine-Mode pin: typing a
+    combine master phrase ("corpus on", "combine full", etc.) into any
+    chat's locked_context promotes that chat to the user's pin, so its
+    combine config inherits across every other chat. Removing the
+    phrase clears the pin. See pipeline.sync_combine_pin_for_chat.
     """
     chat = db.chat_load(user["id"], chat_id)
     if not chat:
@@ -586,6 +592,24 @@ async def set_locked_context(
     meta["locked_context"] = (body.locked_context or "").strip()
     meta["locked_context_enabled"] = bool(body.enabled and meta["locked_context"])
     db.chat_save_meta(user["id"], chat_id, meta)
+
+    # Reconcile the account-wide Combine pin against the new
+    # locked_context. Done here (not on every generation) so the
+    # generation hot-path stays a simple read of users.combine_pin_chat_id.
+    try:
+        from .pipeline import sync_combine_pin_for_chat
+        sync_combine_pin_for_chat(
+            user["id"],
+            chat["id"],
+            meta["locked_context"],
+            meta["locked_context_enabled"],
+        )
+    except Exception as exc:
+        # Pin sync is best-effort — if it fails the user's chat-level
+        # locked context still updated correctly, which is the
+        # primary contract of this route.
+        print(f"[routes] combine pin sync failed: {exc}")
+
     return {
         "ok": True,
         "locked_context": meta["locked_context"],
