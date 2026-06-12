@@ -424,24 +424,60 @@ def _romance_overlay_for(mode: str) -> str:
 # a screenshot-worthy one-liner, in the wordplay-dense style of the
 # 28 hand-curated marketing-script transcripts).
 #
-# Two-part trigger:
-#   1. A master phrase ("combine", "combine mode", "wordplay mode",
-#      "muzo classic", etc.) flips the overlay on. Required.
-#   2. An optional tone keyword inside the same locked_context biases
-#      toward one of the 5 marketing tonal modes (playful_goofball,
-#      cocky_critic, forward_direct, smooth_recovery, dark_taboo).
-#      If absent, the base overlay applies and the model rotates
-#      tones organically.
+# Three depth tiers — pick by keyword:
 #
-# Tone keywords are ONLY consulted when the master phrase is present —
+#   • LEAN ("combine") — the cheap version: voice rules + 12 hand-
+#     picked exemplar lines + Master Playbook. ~3k tokens of overlay.
+#     Voice match in the right zip code; playbook tactics intact.
+#
+#   • FULL ("combine full" / "corpus combine" / "deep combine") —
+#     same as LEAN but ALSO injects the entire 28-transcript marketing
+#     corpus (~10k tokens) under the playbook. Same approach the
+#     marketing video generator uses, layered on the playbook so the
+#     tactical brain stays sharp.
+#
+#   • CORPUS_ONLY ("corpus only" / "pure corpus" / "marketing only") —
+#     drops the Master Playbook entirely. Just rules + voice overlay
+#     + full corpus. Pure marketing voice with no tactical playbook
+#     interference. Used for direct A/B-style comparison against the
+#     normal pipeline.
+#
+# Optional tone keyword (works with all three depths):
+#   playful/goofball, cocky/critic, forward/direct, smooth/recovery,
+#   dark/taboo  →  biases toward one of the 5 marketing tonal modes.
+#
+# Tone keywords are ONLY consulted when a master phrase is present —
 # this prevents casual words like "playful" or "smooth" inside a user's
 # context note from accidentally activating a tonal lock.
 #
 # Composes with Romance Mode: when both trigger, both overlays apply.
 # Romance re-tunes intent; Combine re-tunes voice. Order in the system
-# instruction is: rules → romance overlay → combine overlay → playbook.
+# instruction is:
+#     rules → romance overlay → combine overlay → playbook → corpus
+# (corpus dropped if depth is corpus_only's; playbook dropped if
+#  corpus_only).
 
-_COMBINE_TRIGGERS: tuple[str, ...] = (
+# Trigger phrases by depth. Order of detection: corpus_only beats
+# full beats lean — the most specific phrase wins regardless of
+# which substrings co-occur. So "combine full" matches FULL, never
+# LEAN, even though "combine" is a substring of it.
+
+_COMBINE_CORPUS_ONLY_TRIGGERS: tuple[str, ...] = (
+    "corpus only",
+    "pure corpus",
+    "marketing only",
+    "playbook off",
+    "no playbook",
+)
+_COMBINE_FULL_TRIGGERS: tuple[str, ...] = (
+    "combine full",
+    "full combine",
+    "deep combine",
+    "corpus combine",
+    "combine corpus",
+    "combine deep",
+)
+_COMBINE_LEAN_TRIGGERS: tuple[str, ...] = (
     "combine",
     "combine mode",
     "wordplay mode",
@@ -463,42 +499,117 @@ _COMBINE_TONE_TRIGGERS: tuple[tuple[str, ...], ...] = (
     ("dark_taboo", "dark", "taboo"),
 )
 
+# Depth constants exposed so callers (build_system_instruction) can
+# pattern-match without sharing magic strings.
+COMBINE_DEPTH_LEAN = "lean"
+COMBINE_DEPTH_FULL = "full"
+COMBINE_DEPTH_CORPUS_ONLY = "corpus_only"
 
-def detect_combine_mode(locked_context: str) -> tuple[bool, str | None]:
-    """Detect whether combine-style mode is active for this chat and,
-    if so, which (optional) tonal sub-mode the user requested.
 
-    Returns ``(active, tone)`` where:
-      • ``active`` is True if any master trigger phrase is in the
-        locked_context (case-insensitive substring match).
-      • ``tone`` is the canonical tonal mode id (one of the 5
-        marketing modes) when a tone keyword is also present, or
-        ``None`` to mean "no specific tonal lock — model picks".
+def detect_combine_mode(
+    locked_context: str,
+) -> tuple[bool, str | None, str | None]:
+    """Detect whether combine-style mode is active and, if so, which
+    DEPTH and which (optional) tonal sub-mode.
 
-    Tone keywords are NOT checked unless the master phrase is present,
-    so casual context like "she's a playful person" won't accidentally
-    flip on combine mode.
+    Returns ``(active, tone, depth)`` where:
+      • ``active`` is True if any master trigger phrase is present.
+      • ``tone`` is the canonical tonal mode id when a tone keyword is
+        also present, or ``None`` to mean "no specific tonal lock".
+      • ``depth`` is one of ``"lean"`` / ``"full"`` / ``"corpus_only"``
+        when active, or ``None`` when inactive.
+
+    Detection priority (most specific wins):
+      1. CORPUS_ONLY triggers (drops playbook entirely)
+      2. FULL triggers (lean + full corpus + playbook)
+      3. LEAN triggers (existing voice overlay + playbook)
+
+    Tone keywords are NOT checked unless a master phrase matches, so
+    casual context like "she's a playful person" won't accidentally
+    flip the mode on.
     """
     if not locked_context:
-        return False, None
+        return False, None, None
     t = locked_context.lower()
-    if not any(phrase in t for phrase in _COMBINE_TRIGGERS):
-        return False, None
+
+    depth: str | None = None
+    if any(p in t for p in _COMBINE_CORPUS_ONLY_TRIGGERS):
+        depth = COMBINE_DEPTH_CORPUS_ONLY
+    elif any(p in t for p in _COMBINE_FULL_TRIGGERS):
+        depth = COMBINE_DEPTH_FULL
+    elif any(p in t for p in _COMBINE_LEAN_TRIGGERS):
+        depth = COMBINE_DEPTH_LEAN
+    else:
+        return False, None, None
+
+    tone: str | None = None
     for entry in _COMBINE_TONE_TRIGGERS:
         tone_id = entry[0]
         for kw in entry[1:]:
             if kw in t:
-                return True, tone_id
-    return True, None
+                tone = tone_id
+                break
+        if tone:
+            break
+
+    return True, tone, depth
 
 
-def _combine_overlay_for(active: bool, tone: str | None) -> str:
+# Cache the marketing corpus once at process start. ~37k chars / ~10k
+# tokens. Loaded lazily on the first combine-full or corpus-only
+# generation; afterward every call is a dict lookup.
+
+_MARKETING_CORPUS_CACHE: dict[str, str] = {}
+
+
+def _load_marketing_corpus() -> str:
+    """Return the concatenated 28-transcript marketing corpus.
+
+    Cached after the first successful read. Returns the empty string
+    on any failure — combine mode then falls back gracefully to the
+    lean overlay's embedded exemplars.
+    """
+    cached = _MARKETING_CORPUS_CACHE.get("text")
+    if cached is not None:
+        return cached
+    try:
+        from marketing.corpus import load_raw_corpus
+        text = load_raw_corpus()
+        _MARKETING_CORPUS_CACHE["text"] = text
+        if text:
+            print(
+                f"[saas-pipeline] marketing corpus loaded: "
+                f"{len(text):,} chars"
+            )
+        else:
+            print(
+                "[saas-pipeline] marketing corpus EMPTY — "
+                "falling back to lean exemplars"
+            )
+        return text
+    except Exception as exc:
+        print(f"[saas-pipeline] marketing corpus load failed: {exc}")
+        _MARKETING_CORPUS_CACHE["text"] = ""
+        return ""
+
+
+def _combine_overlay_for(
+    active: bool,
+    tone: str | None,
+    depth: str | None = None,
+) -> str:
     """Return the assembled combine-mode overlay text, or empty string
     when combine mode is off.
 
-    When a tone is specified, the per-tone overlay is appended below
-    the base voice overlay so the model has both: the wordplay rules
-    AND the specific marketing flavor to bias toward.
+    Layered output (top to bottom):
+      1. Base voice overlay (rules + ~12 exemplar lines).
+      2. Tonal mode overlay (if a tone was specified).
+      3. (FULL / CORPUS_ONLY only) The full 28-transcript marketing
+         corpus, headed so the model knows it's training material.
+
+    For LEAN depth (default), the corpus block is omitted — the
+    embedded exemplars in the base overlay are the only example
+    material. Cheaper prompt, voice match in the right zip code.
     """
     if not active:
         return ""
@@ -506,6 +617,20 @@ def _combine_overlay_for(active: bool, tone: str | None) -> str:
     parts = [COMBINE_OVERLAY_BASE]
     if tone and tone in COMBINE_TONE_OVERLAYS:
         parts.append(COMBINE_TONE_OVERLAYS[tone])
+    if depth in (COMBINE_DEPTH_FULL, COMBINE_DEPTH_CORPUS_ONLY):
+        corpus = _load_marketing_corpus()
+        if corpus:
+            parts.append(
+                "## MARKETING TRAINING CORPUS — 28 hand-written viral "
+                "transcripts\n\n"
+                "STUDY THESE. They are the exact pattern and tone you "
+                "must match in this chat. Use them as your north star "
+                "for VOICE — match their rhythm, their wordplay, their "
+                "escalation, their endings. The replies you generate "
+                "should feel like one-liners pulled directly from "
+                "these transcripts.\n\n"
+                f"{corpus}"
+            )
     return "\n\n".join(parts)
 
 
@@ -926,11 +1051,16 @@ async def _generate_pro_for_user_messages(
     # Detect Combine Mode (marketing-voice overlay). Stacks with
     # Romance Mode if both are present — Romance retunes intent,
     # Combine retunes voice; the model handles the composition fine.
-    combine_active, combine_tone = detect_combine_mode(extra_context)
-    combine_overlay = _combine_overlay_for(combine_active, combine_tone)
+    combine_active, combine_tone, combine_depth = detect_combine_mode(
+        extra_context
+    )
+    combine_overlay = _combine_overlay_for(
+        combine_active, combine_tone, combine_depth,
+    )
     if combine_overlay:
         print(
-            f"[saas-pipeline] pro combine_mode=on tone={combine_tone or 'auto'}"
+            f"[saas-pipeline] pro combine_mode=on "
+            f"depth={combine_depth} tone={combine_tone or 'auto'}"
         )
 
     def build_system_instruction(safe: bool) -> str:
@@ -941,11 +1071,15 @@ async def _generate_pro_for_user_messages(
 
         Overlay order matters: rules first (identity / brand-edge /
         output schema), then strategic re-tune (Romance), then voice
-        re-tune (Combine), then tactical playbook. Reading order
-        matters because the model treats latest content as most-
-        relevant — the playbook follows so its tactical specifics
-        anchor the final output, while the overlays bias the
-        strategy/voice that gets applied to those tactics.
+        re-tune (Combine — which itself contains the optional full
+        marketing corpus when depth is full/corpus_only), then
+        tactical playbook. Reading order matters because the model
+        treats latest content as most-relevant.
+
+        Special case — combine depth = corpus_only: the Master
+        Playbook is intentionally DROPPED so the marketing corpus is
+        the sole tactical/voice reference. Used to A/B-compare the
+        marketing voice against the playbook-conditioned output.
         """
         base = REPLY_SYSTEM_PROMPT_SAFE if safe else REPLY_SYSTEM_PROMPT
         rules_only = base.split("Conversation:\n{transcript}")[0].rstrip()
@@ -954,7 +1088,8 @@ async def _generate_pro_for_user_messages(
             parts.append(overlay)
         if combine_overlay:
             parts.append(combine_overlay)
-        if playbook:
+        skip_playbook = combine_depth == COMBINE_DEPTH_CORPUS_ONLY
+        if playbook and not skip_playbook:
             parts.append(playbook)
         return "\n\n".join(parts)
 
@@ -1187,11 +1322,16 @@ async def _generate_quick_via_flash35(
 
     # Detect Combine Mode (marketing-voice overlay). Mirror of Pro
     # path. Stacks with Romance Mode if both are present.
-    combine_active, combine_tone = detect_combine_mode(extra_context)
-    combine_overlay = _combine_overlay_for(combine_active, combine_tone)
+    combine_active, combine_tone, combine_depth = detect_combine_mode(
+        extra_context
+    )
+    combine_overlay = _combine_overlay_for(
+        combine_active, combine_tone, combine_depth,
+    )
     if combine_overlay:
         print(
-            f"[saas-pipeline] quick combine_mode=on tone={combine_tone or 'auto'}"
+            f"[saas-pipeline] quick combine_mode=on "
+            f"depth={combine_depth} tone={combine_tone or 'auto'}"
         )
 
     def build_system_instruction(safe: bool) -> str:
@@ -1199,7 +1339,11 @@ async def _generate_quick_via_flash35(
         from the prompt template (we put the transcript in the user
         turn instead), then concat: rules → Romance overlay (if any)
         → Combine overlay (if any) → Master Playbook. Order mirrors
-        the Pro path so behavior stays consistent across modes."""
+        the Pro path so behavior stays consistent across modes.
+
+        Special case — combine depth = corpus_only: the Master
+        Playbook is intentionally DROPPED. Marketing corpus inside
+        the combine overlay becomes the sole reference."""
         base = REPLY_SYSTEM_PROMPT_SAFE if safe else REPLY_SYSTEM_PROMPT
         rules_only = base.split("Conversation:\n{transcript}")[0].rstrip()
         parts = [rules_only]
@@ -1207,7 +1351,8 @@ async def _generate_quick_via_flash35(
             parts.append(overlay)
         if combine_overlay:
             parts.append(combine_overlay)
-        if playbook:
+        skip_playbook = combine_depth == COMBINE_DEPTH_CORPUS_ONLY
+        if playbook and not skip_playbook:
             parts.append(playbook)
         return "\n\n".join(parts)
 
