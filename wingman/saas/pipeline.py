@@ -417,6 +417,99 @@ def _romance_overlay_for(mode: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Combine Mode detection — marketing-voice overlay triggers
+# ---------------------------------------------------------------------------
+# Sister system to Romance Mode. Where Romance changes STRATEGY (slow
+# burn, build investment), Combine changes VOICE (every reply lands as
+# a screenshot-worthy one-liner, in the wordplay-dense style of the
+# 28 hand-curated marketing-script transcripts).
+#
+# Two-part trigger:
+#   1. A master phrase ("combine", "combine mode", "wordplay mode",
+#      "muzo classic", etc.) flips the overlay on. Required.
+#   2. An optional tone keyword inside the same locked_context biases
+#      toward one of the 5 marketing tonal modes (playful_goofball,
+#      cocky_critic, forward_direct, smooth_recovery, dark_taboo).
+#      If absent, the base overlay applies and the model rotates
+#      tones organically.
+#
+# Tone keywords are ONLY consulted when the master phrase is present —
+# this prevents casual words like "playful" or "smooth" inside a user's
+# context note from accidentally activating a tonal lock.
+#
+# Composes with Romance Mode: when both trigger, both overlays apply.
+# Romance re-tunes intent; Combine re-tunes voice. Order in the system
+# instruction is: rules → romance overlay → combine overlay → playbook.
+
+_COMBINE_TRIGGERS: tuple[str, ...] = (
+    "combine",
+    "combine mode",
+    "wordplay mode",
+    "poetic mode",
+    "muzo classic",
+    "aphorism mode",
+)
+
+# Tone keyword aliases — first list-element is the canonical tone id;
+# remaining elements are substring keywords that activate it. Checked
+# in order, first match wins. The user said they want each of the
+# split-out words to work, so both halves of each compound tone are
+# accepted.
+_COMBINE_TONE_TRIGGERS: tuple[tuple[str, ...], ...] = (
+    ("playful_goofball", "playful", "goofball"),
+    ("cocky_critic", "cocky", "critic"),
+    ("forward_direct", "forward", "direct"),
+    ("smooth_recovery", "smooth", "recovery"),
+    ("dark_taboo", "dark", "taboo"),
+)
+
+
+def detect_combine_mode(locked_context: str) -> tuple[bool, str | None]:
+    """Detect whether combine-style mode is active for this chat and,
+    if so, which (optional) tonal sub-mode the user requested.
+
+    Returns ``(active, tone)`` where:
+      • ``active`` is True if any master trigger phrase is in the
+        locked_context (case-insensitive substring match).
+      • ``tone`` is the canonical tonal mode id (one of the 5
+        marketing modes) when a tone keyword is also present, or
+        ``None`` to mean "no specific tonal lock — model picks".
+
+    Tone keywords are NOT checked unless the master phrase is present,
+    so casual context like "she's a playful person" won't accidentally
+    flip on combine mode.
+    """
+    if not locked_context:
+        return False, None
+    t = locked_context.lower()
+    if not any(phrase in t for phrase in _COMBINE_TRIGGERS):
+        return False, None
+    for entry in _COMBINE_TONE_TRIGGERS:
+        tone_id = entry[0]
+        for kw in entry[1:]:
+            if kw in t:
+                return True, tone_id
+    return True, None
+
+
+def _combine_overlay_for(active: bool, tone: str | None) -> str:
+    """Return the assembled combine-mode overlay text, or empty string
+    when combine mode is off.
+
+    When a tone is specified, the per-tone overlay is appended below
+    the base voice overlay so the model has both: the wordplay rules
+    AND the specific marketing flavor to bias toward.
+    """
+    if not active:
+        return ""
+    from wingman.config import COMBINE_OVERLAY_BASE, COMBINE_TONE_OVERLAYS
+    parts = [COMBINE_OVERLAY_BASE]
+    if tone and tone in COMBINE_TONE_OVERLAYS:
+        parts.append(COMBINE_TONE_OVERLAYS[tone])
+    return "\n\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
 # Chat routing — 3-tier disambiguation (ported from desktop)
 # ---------------------------------------------------------------------------
 # The desktop hotkey path solved this years ago with a structured local
@@ -830,24 +923,37 @@ async def _generate_pro_for_user_messages(
     if overlay:
         print(f"[saas-pipeline] pro chat_mode={chat_mode}")
 
+    # Detect Combine Mode (marketing-voice overlay). Stacks with
+    # Romance Mode if both are present — Romance retunes intent,
+    # Combine retunes voice; the model handles the composition fine.
+    combine_active, combine_tone = detect_combine_mode(extra_context)
+    combine_overlay = _combine_overlay_for(combine_active, combine_tone)
+    if combine_overlay:
+        print(
+            f"[saas-pipeline] pro combine_mode=on tone={combine_tone or 'auto'}"
+        )
+
     def build_system_instruction(safe: bool) -> str:
         """Match desktop's Pro structure: rules portion of the system
-        prompt + (optional) Romance Mode overlay + Master Playbook in
-        the system_instruction. The transcript itself goes in the user
-        prompt below.
+        prompt + (optional) Romance Mode overlay + (optional) Combine
+        Mode overlay + Master Playbook in the system_instruction. The
+        transcript itself goes in the user prompt below.
 
-        Romance Mode overlay sits BETWEEN the rules and the playbook —
-        rules first (identity / brand-edge / output schema), then the
-        strategic re-tune, then the tactical playbook. Reading order
-        matters: the model treats latest content as most-relevant, so
-        the playbook (which it weighs heavily on tactics) follows the
-        overlay rather than precedes it.
+        Overlay order matters: rules first (identity / brand-edge /
+        output schema), then strategic re-tune (Romance), then voice
+        re-tune (Combine), then tactical playbook. Reading order
+        matters because the model treats latest content as most-
+        relevant — the playbook follows so its tactical specifics
+        anchor the final output, while the overlays bias the
+        strategy/voice that gets applied to those tactics.
         """
         base = REPLY_SYSTEM_PROMPT_SAFE if safe else REPLY_SYSTEM_PROMPT
         rules_only = base.split("Conversation:\n{transcript}")[0].rstrip()
         parts = [rules_only]
         if overlay:
             parts.append(overlay)
+        if combine_overlay:
+            parts.append(combine_overlay)
         if playbook:
             parts.append(playbook)
         return "\n\n".join(parts)
@@ -1079,16 +1185,28 @@ async def _generate_quick_via_flash35(
     if overlay:
         print(f"[saas-pipeline] quick chat_mode={chat_mode}")
 
+    # Detect Combine Mode (marketing-voice overlay). Mirror of Pro
+    # path. Stacks with Romance Mode if both are present.
+    combine_active, combine_tone = detect_combine_mode(extra_context)
+    combine_overlay = _combine_overlay_for(combine_active, combine_tone)
+    if combine_overlay:
+        print(
+            f"[saas-pipeline] quick combine_mode=on tone={combine_tone or 'auto'}"
+        )
+
     def build_system_instruction(safe: bool) -> str:
         """Strip the trailing 'Conversation: {transcript}' placeholder
         from the prompt template (we put the transcript in the user
         turn instead), then concat: rules → Romance overlay (if any)
-        → Master Playbook. Order mirrors the Pro path."""
+        → Combine overlay (if any) → Master Playbook. Order mirrors
+        the Pro path so behavior stays consistent across modes."""
         base = REPLY_SYSTEM_PROMPT_SAFE if safe else REPLY_SYSTEM_PROMPT
         rules_only = base.split("Conversation:\n{transcript}")[0].rstrip()
         parts = [rules_only]
         if overlay:
             parts.append(overlay)
+        if combine_overlay:
+            parts.append(combine_overlay)
         if playbook:
             parts.append(playbook)
         return "\n\n".join(parts)
