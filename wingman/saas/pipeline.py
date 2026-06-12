@@ -424,7 +424,7 @@ def _romance_overlay_for(mode: str) -> str:
 # a screenshot-worthy one-liner, in the wordplay-dense style of the
 # 28 hand-curated marketing-script transcripts).
 #
-# Three depth tiers — pick by keyword:
+# Three depth tiers — pick by keyword in a chat's locked_context:
 #
 #   • LEAN ("combine") — the cheap version: voice rules + 12 hand-
 #     picked exemplar lines + Master Playbook. ~3k tokens of overlay.
@@ -453,59 +453,31 @@ def _romance_overlay_for(mode: str) -> str:
 # Composes with Romance Mode: when both trigger, both overlays apply.
 # Romance re-tunes intent; Combine re-tunes voice. Order in the system
 # instruction is:
-#     rules → romance overlay → combine overlay → playbook → corpus
-# (corpus dropped if depth is corpus_only's; playbook dropped if
-#  corpus_only).
-
-# Trigger phrases by depth. Order of detection: corpus_only beats
-# full beats lean — the most specific phrase wins regardless of
-# which substrings co-occur. So "combine full" matches FULL, never
-# LEAN, even though "combine" is a substring of it.
-
-# Within each tier, longer phrases come first so the substring-based
-# extractor picks the most-specific phrase the user actually typed
-# instead of bottoming out on the bare alias. e.g. "combine on" should
-# extract as "combine on", not "combine".
+#     rules → romance overlay → combine overlay → playbook
+# (playbook dropped only when depth is corpus_only).
 
 _COMBINE_CORPUS_ONLY_TRIGGERS: tuple[str, ...] = (
+    "corpus only",
+    "pure corpus",
     "marketing only",
     "playbook off",
-    "pure corpus",
     "no playbook",
-    "corpus only",
 )
 _COMBINE_FULL_TRIGGERS: tuple[str, ...] = (
-    "combine corpus",
-    "corpus combine",
     "combine full",
-    "combine deep",
     "full combine",
     "deep combine",
-    "corpus mode",
-    "corpus on",       # user-requested alias for global-pin enablement
+    "corpus combine",
+    "combine corpus",
+    "combine deep",
 )
 _COMBINE_LEAN_TRIGGERS: tuple[str, ...] = (
-    "wordplay mode",
-    "aphorism mode",
+    "combine",
     "combine mode",
-    "muzo classic",
+    "wordplay mode",
     "poetic mode",
-    "combine on",
-    "combine",         # bare alias — kept last so longer phrases win
-)
-
-# OFF triggers — per-chat exemption from Combine Mode. When any of
-# these substrings appear in a chat's locked_context, that chat is
-# treated as if combine mode were entirely disabled, regardless of:
-#   • whether the chat has its own master phrase, AND
-#   • whether the user has an account-wide combine pin set.
-# This is the "I want corpus everywhere EXCEPT this one chat" lever.
-_COMBINE_OFF_TRIGGERS: tuple[str, ...] = (
-    "corpus off",
-    "combine off",
-    "no corpus",
-    "no combine",
-    "playbook only",
+    "muzo classic",
+    "aphorism mode",
 )
 
 # Tone keyword aliases — first list-element is the canonical tone id;
@@ -528,43 +500,6 @@ COMBINE_DEPTH_FULL = "full"
 COMBINE_DEPTH_CORPUS_ONLY = "corpus_only"
 
 
-def has_combine_off(locked_context: str) -> bool:
-    """True iff this locked_context carries an explicit per-chat
-    exemption from Combine Mode (any of the OFF trigger phrases).
-
-    OFF beats every other detection step — both the chat's own
-    master triggers AND any account-wide pin. Used by both the
-    public `detect_combine_mode` (so direct callers also respect
-    the OFF) and the global-pin resolver (so an exempted chat
-    skips the inheritance lookup entirely).
-    """
-    if not locked_context:
-        return False
-    t = locked_context.lower()
-    return any(p in t for p in _COMBINE_OFF_TRIGGERS)
-
-
-def has_combine_master(locked_context: str) -> bool:
-    """True iff this locked_context contains any combine master
-    trigger (LEAN / FULL / CORPUS_ONLY tier). OFF triggers are NOT
-    counted — a chat that has both `combine playful` and `combine off`
-    is exempted, not configured. Used by the auto-pin sync to decide
-    when a chat becomes (or stops being) the user's pinned source.
-    """
-    if not locked_context:
-        return False
-    if has_combine_off(locked_context):
-        return False
-    t = locked_context.lower()
-    if any(p in t for p in _COMBINE_CORPUS_ONLY_TRIGGERS):
-        return True
-    if any(p in t for p in _COMBINE_FULL_TRIGGERS):
-        return True
-    if any(p in t for p in _COMBINE_LEAN_TRIGGERS):
-        return True
-    return False
-
-
 def detect_combine_mode(
     locked_context: str,
 ) -> tuple[bool, str | None, str | None]:
@@ -572,15 +507,13 @@ def detect_combine_mode(
     DEPTH and which (optional) tonal sub-mode.
 
     Returns ``(active, tone, depth)`` where:
-      • ``active`` is True if any master trigger phrase is present
-        AND no OFF trigger is present.
+      • ``active`` is True if any master trigger phrase is present.
       • ``tone`` is the canonical tonal mode id when a tone keyword is
         also present, or ``None`` to mean "no specific tonal lock".
       • ``depth`` is one of ``"lean"`` / ``"full"`` / ``"corpus_only"``
         when active, or ``None`` when inactive.
 
     Detection priority (most specific wins):
-      0. OFF triggers — short-circuit to inactive (chat exempted).
       1. CORPUS_ONLY triggers (drops playbook entirely)
       2. FULL triggers (lean + full corpus + playbook)
       3. LEAN triggers (existing voice overlay + playbook)
@@ -590,11 +523,6 @@ def detect_combine_mode(
     flip the mode on.
     """
     if not locked_context:
-        return False, None, None
-    if has_combine_off(locked_context):
-        # Hard exemption — this chat skips combine no matter what
-        # else its locked_context says, and no matter what's pinned
-        # at the account level.
         return False, None, None
     t = locked_context.lower()
 
@@ -619,196 +547,6 @@ def detect_combine_mode(
             break
 
     return True, tone, depth
-
-
-def extract_combine_signals(locked_context: str) -> str:
-    """Pull just the Combine-Mode trigger phrases out of a chat's
-    locked_context, dropping everything else.
-
-    Used by the global-pin resolver: when chat A is the pinned source
-    of "combine full cocky" and chat B has no combine config of its
-    own, we want to propagate the COMBINE INSTRUCTION to chat B's
-    generation pipeline — but we do NOT want to leak chat A's other
-    notes ("she's a vegan, has a Pomeranian named Biscuit") into
-    chat B's prompt. Returning just the signal phrases keeps the
-    inheritance information-clean.
-
-    Returns a short string like ``"combine full cocky"`` (or empty
-    when no combine phrases are present), suitable for appending to
-    the recipient chat's merged_context.
-    """
-    if not locked_context:
-        return ""
-    if has_combine_off(locked_context):
-        return ""
-    t = locked_context.lower()
-    found: list[str] = []
-
-    # One master phrase, in priority order — corpus_only > full > lean.
-    master: str | None = None
-    for phrase in _COMBINE_CORPUS_ONLY_TRIGGERS:
-        if phrase in t:
-            master = phrase
-            break
-    if master is None:
-        for phrase in _COMBINE_FULL_TRIGGERS:
-            if phrase in t:
-                master = phrase
-                break
-    if master is None:
-        for phrase in _COMBINE_LEAN_TRIGGERS:
-            if phrase in t:
-                master = phrase
-                break
-    if master is None:
-        return ""
-    found.append(master)
-
-    # First matching tone keyword (mirrors detect_combine_mode order).
-    for entry in _COMBINE_TONE_TRIGGERS:
-        for kw in entry[1:]:
-            if kw in t:
-                found.append(kw)
-                break
-        else:
-            continue
-        break
-
-    return " ".join(found)
-
-
-def resolve_combine_signal_for_chat(
-    user_id: str,
-    current_chat_meta: dict | None,
-) -> str:
-    """Compute the Combine-Mode signal string that should flow into
-    THIS generation, taking the user's account-wide pin into account.
-
-    Decision tree:
-
-      1. If the current chat has an OFF trigger ("corpus off" etc.) →
-         return empty (chat is hard-exempted, even from the pin).
-      2. If the current chat has its own master trigger → return empty
-         (chat's own locked_context already carries the signal; no
-         inheritance needed and we don't want to double-stack tones).
-      3. Otherwise, look up the user's pin. If set:
-           a. Load the pinned chat's meta. If it's gone or the
-              locked_context no longer carries a master trigger →
-              the pin is orphaned; clear it and return empty.
-           b. Extract just the combine signals from the pinned
-              chat's locked_context and return them.
-      4. No pin → return empty.
-
-    The returned string is meant to be APPENDED to the current
-    generation's merged_context so detect_combine_mode picks it up
-    via the same substring path that handles in-chat triggers.
-    """
-    cur_lc = ""
-    if current_chat_meta:
-        cur_lc = (current_chat_meta.get("locked_context") or "").strip()
-        # Only honor the locked_context if the user actually enabled
-        # the lock — same gate _merge_locked_context applies. A
-        # disabled lock means the user has the text saved but is
-        # not currently using it, so the OFF/master detection should
-        # treat it as absent.
-        if not current_chat_meta.get("locked_context_enabled"):
-            cur_lc = ""
-
-    if has_combine_off(cur_lc):
-        return ""
-    if has_combine_master(cur_lc):
-        return ""
-
-    pin_chat_id = db.get_combine_pin(user_id)
-    if not pin_chat_id:
-        return ""
-
-    pin_chat = db.chat_meta_by_id(user_id, pin_chat_id)
-    if not pin_chat:
-        # Pin orphaned (chat deleted or rotated). Clear it so we
-        # don't keep paying the lookup cost on every generation.
-        db.set_combine_pin(user_id, None)
-        print(
-            f"[saas-pipeline] combine_pin orphaned (chat gone) — "
-            f"cleared user={user_id[:8]}…"
-        )
-        return ""
-
-    pin_meta = pin_chat.get("meta") or {}
-    pin_lc = (pin_meta.get("locked_context") or "").strip()
-    if not pin_meta.get("locked_context_enabled"):
-        # User toggled the lock off on the pinned chat — same as
-        # if the trigger phrase had been removed.
-        db.set_combine_pin(user_id, None)
-        print(
-            f"[saas-pipeline] combine_pin source disabled — "
-            f"cleared user={user_id[:8]}…"
-        )
-        return ""
-
-    if not has_combine_master(pin_lc):
-        # Pin source no longer has a master trigger. Clear stale.
-        db.set_combine_pin(user_id, None)
-        print(
-            f"[saas-pipeline] combine_pin source has no master trigger "
-            f"anymore — cleared user={user_id[:8]}…"
-        )
-        return ""
-
-    signal = extract_combine_signals(pin_lc)
-    if signal:
-        print(
-            f"[saas-pipeline] combine_pin inherited "
-            f"user={user_id[:8]}… signal={signal!r}"
-        )
-    return signal
-
-
-def sync_combine_pin_for_chat(
-    user_id: str,
-    chat_id: str,
-    locked_context: str,
-    locked_context_enabled: bool,
-) -> None:
-    """Reconcile the user's account-wide combine pin against the
-    just-saved locked_context for ``chat_id``.
-
-    Called from the PATCH /chats/{id}/context route every time the
-    user updates a chat's locked_context. Three cases:
-
-      • Chat now has an active master trigger AND no OFF override →
-        promote this chat to be the user's pin (overwriting any
-        previous pin on a different chat).
-      • Chat is currently the pin AND no longer has an active master
-        (or just toggled lock off, or added an OFF trigger) →
-        clear the pin so the global state matches reality.
-      • Otherwise → no-op.
-
-    Doing this on save (rather than on every generation) keeps the
-    hot generation path cheap — generation only reads the pin, never
-    re-scans every chat.
-    """
-    effective_lc = locked_context.strip() if locked_context else ""
-    if not locked_context_enabled:
-        effective_lc = ""
-
-    has_master_now = has_combine_master(effective_lc)
-    current_pin = db.get_combine_pin(user_id)
-
-    if has_master_now:
-        if current_pin != chat_id:
-            db.set_combine_pin(user_id, chat_id)
-            print(
-                f"[saas-pipeline] combine_pin set "
-                f"user={user_id[:8]}… chat={chat_id}"
-            )
-    else:
-        if current_pin == chat_id:
-            db.set_combine_pin(user_id, None)
-            print(
-                f"[saas-pipeline] combine_pin cleared "
-                f"user={user_id[:8]}… (was chat={chat_id})"
-            )
 
 
 # Cache the marketing corpus once at process start. ~37k chars / ~10k
@@ -1145,22 +883,6 @@ async def quick_capture_for_user(
     # girl from the gym, super into climbing" every time.
     merged_context = _merge_locked_context(existing_meta, extra_context)
 
-    # Apply the user's account-wide Combine-Mode pin (if any). Unlike
-    # the chat-scoped locked_context above, this is account-level: the
-    # user types "corpus on" in some pinned chat and inherits combine
-    # mode in EVERY other chat. Returns empty when the current chat
-    # is exempted (`corpus off`), already has its own combine config,
-    # or no pin is set.
-    combine_signal = resolve_combine_signal_for_chat(
-        ctx.user_id, existing_meta,
-    )
-    if combine_signal:
-        merged_context = (
-            f"{merged_context} {combine_signal}".strip()
-            if merged_context
-            else combine_signal
-        )
-
     # Step 3: generate replies — route by mode
     conv = ConversationState()
     conv.ingest_parsed_messages(appended)
@@ -1221,18 +943,6 @@ async def regenerate_for_user(
     conv.ingest_parsed_messages(chat["messages"])
     # Same locked-context merge as quick-capture — see helper.
     merged_context = _merge_locked_context(chat["meta"], extra_context)
-    # Same Combine-Mode pin propagation as quick-capture, so regenerating
-    # an existing chat behaves identically to generating a fresh one
-    # for the same chat.
-    combine_signal = resolve_combine_signal_for_chat(
-        ctx.user_id, chat.get("meta"),
-    )
-    if combine_signal:
-        merged_context = (
-            f"{merged_context} {combine_signal}".strip()
-            if merged_context
-            else combine_signal
-        )
     if mode == "pro":
         replies, read, advice, model_tag, cost = await _generate_pro_for_user_messages(
             ctx, conv.messages, extra_context=merged_context,

@@ -217,19 +217,7 @@ CREATE TABLE IF NOT EXISTS users (
   -- (no lifetime trial, no daily allowance) — they must subscribe.
   -- This closes the "make new account → still get 2 Quick/day"
   -- loophole the lifetime cap on its own can't.
-  free_trial_blocked   BOOLEAN NOT NULL DEFAULT FALSE,
-  -- Optional account-wide Combine-Mode pin. When set, this user has
-  -- typed a combine master trigger ("corpus on", "combine full", etc.)
-  -- into the locked_context of the referenced chat, and that chat's
-  -- combine config (depth + tone) is inherited by every OTHER chat
-  -- the user generates in — unless the other chat carries an explicit
-  -- "corpus off" / "combine off" exemption in its own locked_context.
-  -- Removing the master phrase from the pinned chat clears this back
-  -- to NULL (handled by the PATCH /chats/{id}/context route).
-  -- Stored as the chat id rather than the contact name so renaming a
-  -- chat doesn't orphan the pin. Null tolerated for legacy rows and
-  -- the common case (no global combine).
-  combine_pin_chat_id  TEXT
+  free_trial_blocked   BOOLEAN NOT NULL DEFAULT FALSE
 );
 -- NB: index on device_id is created in init_db() after the backfill
 -- step adds the column on existing deployments. Putting it here
@@ -311,10 +299,6 @@ def init_db() -> None:
             conn, "users", "free_trial_blocked",
             "BOOLEAN NOT NULL DEFAULT FALSE",
         )
-        # Account-wide Combine-Mode pin. Null on existing rows; gets
-        # populated lazily when the user first types a combine master
-        # phrase into any chat's locked_context.
-        _backfill_column(conn, "users", "combine_pin_chat_id", "TEXT")
         # Index on device_id for fast lookup of prior accounts on
         # the same device. IF NOT EXISTS so it's safe to re-run.
         try:
@@ -864,68 +848,6 @@ def chat_save_meta(user_id: str, contact: str, meta: dict) -> None:
         conn.execute(
             "UPDATE chats SET meta_json = ? WHERE id = ?",
             (meta_json, chat_id),
-        )
-
-
-def chat_meta_by_id(user_id: str, chat_id: str) -> dict | None:
-    """Lightweight chat lookup by id (not by contact). Returns just
-    ``{"id", "contact", "meta"}`` — used by the Combine-Mode pin
-    resolver, which only needs the meta blob and doesn't want to pay
-    the cost of deserializing the full message array.
-
-    Returns None when the chat doesn't exist or belongs to another
-    user — callers should treat this as "pin orphaned, clear it".
-    """
-    if not chat_id:
-        return None
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT id, contact, meta_json FROM chats "
-            "WHERE id = ? AND user_id = ?",
-            (chat_id, user_id),
-        ).fetchone()
-    if not row:
-        return None
-    try:
-        meta = json.loads(row["meta_json"] or "{}")
-    except Exception:
-        meta = {}
-    return {
-        "id": row["id"],
-        "contact": row["contact"],
-        "meta": meta,
-    }
-
-
-def get_combine_pin(user_id: str) -> str | None:
-    """Return the chat_id this user has pinned for account-wide
-    Combine-Mode propagation, or None when no pin is set."""
-    if not user_id:
-        return None
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT combine_pin_chat_id FROM users WHERE id = ?",
-            (user_id,),
-        ).fetchone()
-    if not row:
-        return None
-    val = row["combine_pin_chat_id"]
-    return val if val else None
-
-
-def set_combine_pin(user_id: str, chat_id: str | None) -> None:
-    """Set or clear the user's account-wide Combine-Mode pin.
-
-    Pass ``chat_id=None`` to clear. Idempotent — writing the same
-    value back is a no-op at the application layer (still hits the
-    DB, but harmless).
-    """
-    if not user_id:
-        return
-    with connect() as conn:
-        conn.execute(
-            "UPDATE users SET combine_pin_chat_id = ? WHERE id = ?",
-            (chat_id if chat_id else None, user_id),
         )
 
 
