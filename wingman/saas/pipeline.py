@@ -1107,7 +1107,7 @@ async def _generate_pro_for_user_messages(
             parts.append(overlay)
         if combine_overlay:
             parts.append(combine_overlay)
-        skip_playbook = combine_depth == COMBINE_DEPTH_CORPUS_ONLY
+        skip_playbook = combine_depth == COMBINE_DEPTH_CORPUS_ONLY or bool(full_corpus_text)
         if playbook and not skip_playbook:
             parts.append(playbook)
         return "\n\n".join(parts)
