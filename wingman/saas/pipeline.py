@@ -1059,18 +1059,12 @@ async def _generate_pro_for_user_messages(
 
     # Full Corpus mode: inject the entire 2.5MB training corpus into
     # system instruction. Gemini's implicit caching makes subsequent
-    # calls 90% cheaper. Triggered by:
-    #   1. GEMINI_FULL_TRAINING=1 env var (global default ON)
-    #   2. #fullcorpus in locked_context (per-chat override)
-    #   3. #nofullcorpus in locked_context to disable for a specific chat
+    # calls 90% cheaper. Triggered by #fullcorpus in locked_context.
     full_corpus_text = ""
-    use_full_corpus = os.getenv("GEMINI_FULL_TRAINING", "1").strip().lower() in ("1", "true", "yes", "on")
+    use_full_corpus = False
     if "#fullcorpus" in (extra_context or ""):
         use_full_corpus = True
         extra_context = extra_context.replace("#fullcorpus", "").strip()
-    if "#nofullcorpus" in (extra_context or ""):
-        use_full_corpus = False
-        extra_context = extra_context.replace("#nofullcorpus", "").strip()
     if use_full_corpus:
         try:
             from wingman.training_corpus import TrainingCorpus
