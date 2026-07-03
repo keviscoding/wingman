@@ -1057,6 +1057,31 @@ async def _generate_pro_for_user_messages(
             f"depth={combine_depth} tone={combine_tone or 'auto'}"
         )
 
+    # Full Corpus mode: inject the entire 2.5MB training corpus into
+    # system instruction. Gemini's implicit caching makes subsequent
+    # calls 90% cheaper. Triggered by:
+    #   1. GEMINI_FULL_TRAINING=1 env var (global default ON)
+    #   2. #fullcorpus in locked_context (per-chat override)
+    #   3. #nofullcorpus in locked_context to disable for a specific chat
+    full_corpus_text = ""
+    use_full_corpus = os.getenv("GEMINI_FULL_TRAINING", "1").strip().lower() in ("1", "true", "yes", "on")
+    if "#fullcorpus" in (extra_context or ""):
+        use_full_corpus = True
+        extra_context = extra_context.replace("#fullcorpus", "").strip()
+    if "#nofullcorpus" in (extra_context or ""):
+        use_full_corpus = False
+        extra_context = extra_context.replace("#nofullcorpus", "").strip()
+    if use_full_corpus:
+        try:
+            from wingman.training_corpus import TrainingCorpus
+            corpus = TrainingCorpus()
+            corpus.load()
+            if not corpus.is_empty:
+                full_corpus_text = corpus.text
+                print(f"[saas-pipeline] pro full_corpus mode: {len(full_corpus_text)//1000}k chars")
+        except Exception as exc:
+            print(f"[saas-pipeline] full corpus load failed: {exc}")
+
     def build_system_instruction(safe: bool) -> str:
         """Match desktop's Pro structure: rules portion of the system
         prompt + (optional) Romance Mode overlay + (optional) Combine
@@ -1074,10 +1099,16 @@ async def _generate_pro_for_user_messages(
         Playbook is intentionally DROPPED so the marketing corpus is
         the sole tactical/voice reference. Used to A/B-compare the
         marketing voice against the playbook-conditioned output.
+
+        Full corpus mode: the entire training corpus is prepended as a
+        stable prefix (Gemini caches it after the first call).
         """
         base = REPLY_SYSTEM_PROMPT_SAFE if safe else REPLY_SYSTEM_PROMPT
         rules_only = base.split("Conversation:\n{transcript}")[0].rstrip()
-        parts = [rules_only]
+        parts = []
+        if full_corpus_text:
+            parts.append(full_corpus_text)
+        parts.append(rules_only)
         if overlay:
             parts.append(overlay)
         if combine_overlay:
