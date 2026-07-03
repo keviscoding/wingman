@@ -82,7 +82,17 @@ def build_corpus_text() -> tuple[str, str, int]:
 
     Empty tuple (``"", "", 0``) if the training folder is missing or empty."""
     files = _read_files()
+
+    # If no raw files exist (e.g. server deployment), load from cache directly
     if not files:
+        if CACHE_PATH.exists():
+            try:
+                cached = json.loads(CACHE_PATH.read_text())
+                if cached.get("text"):
+                    print(f"[corpus] Loaded cached corpus from disk ({cached.get('char_count', 0)//1000}k chars)")
+                    return cached["text"], cached.get("hash", ""), cached.get("file_count", 0)
+            except Exception:
+                pass
         return "", "", 0
 
     current_hash = _compute_hash(files)
