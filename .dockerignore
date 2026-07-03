@@ -17,11 +17,10 @@ mobile/
 WINGMAN UI/
 mockups/
 
-# Training corpus ships in the image so #fullcorpus mode works.
-# The precomputed Master Playbook is always used; the full corpus
-# (121 txt files, ~2.5MB) is injected on-demand via #fullcorpus.
-# .full_corpus.json cache is excluded (rebuilt at runtime).
-training/.full_corpus.json
+# Training: exclude raw transcripts but keep precomputed artifacts.
+training/*
+!training/.master_playbook.json
+!training/.full_corpus.json
 
 # Notebooks + dev scripts
 *.ipynb
