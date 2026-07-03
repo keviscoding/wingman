@@ -17,11 +17,11 @@ mobile/
 WINGMAN UI/
 mockups/
 
-# Raw training transcripts stay private — but the precomputed Master
-# Playbook (training/.master_playbook.json) MUST ship so Pro replies
-# get the trained-voice quality. Negation rule below whitelists it.
-training/*
-!training/.master_playbook.json
+# Training corpus ships in the image so #fullcorpus mode works.
+# The precomputed Master Playbook is always used; the full corpus
+# (121 txt files, ~2.5MB) is injected on-demand via #fullcorpus.
+# .full_corpus.json cache is excluded (rebuilt at runtime).
+training/.full_corpus.json
 
 # Notebooks + dev scripts
 *.ipynb

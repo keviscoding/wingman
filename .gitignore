@@ -32,11 +32,11 @@ case_studies/
 examples_library/
 training_dataset/
 # training/ holds 100+ raw transcripts (private). DO NOT commit those.
-# But the precomputed master playbook (.master_playbook.json) IS the
-# whitelisted artifact the SaaS server needs to inject quality on Pro
-# generations — keep it in git via the negation rule below.
+# But the precomputed artifacts (.master_playbook.json and .full_corpus.json)
+# ARE whitelisted — the SaaS server needs them for Pro reply quality.
 training/*
 !training/.master_playbook.json
+!training/.full_corpus.json
 presets.json
 global_settings.json
 wingman.log
